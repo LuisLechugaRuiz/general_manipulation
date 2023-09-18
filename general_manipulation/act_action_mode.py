@@ -17,7 +17,7 @@ class ACTActionMode(ActionMode):
         self.act_executor = act_executor
         self.key_points = {}
         self.last_action = np.zeros(9,)
-        self.threshold = 0.02
+        self.threshold = 0.05
         self.images = 0  # TODO: Remove when we draw_circle_on_image.
         self.keypoints = 0 # TODO: Remove later!
         self.step_iterations = 20
@@ -29,8 +29,8 @@ class ACTActionMode(ActionMode):
         obs = scene.get_observation()
         obs_dict = self.get_obs_dict(obs)
         gripper_pose = obs_dict["gripper_pose"]
-        print(f"IT: {self.keypoints}, CURRENT POSE: {gripper_pose}, NEW KEYPOINT: {action}")
-        print("DEBUG - Gripper open", obs_dict["gripper_open"])
+        # print(f"IT: {self.keypoints}, CURRENT POSE: {gripper_pose}, NEW KEYPOINT: {action}")
+        # print("DEBUG - Gripper open", obs_dict["gripper_open"])
         self.keypoints += 1
 
         # Only fill key point if action is not equal to last, this is due to the stuck condition, remove it after.
@@ -55,13 +55,12 @@ class ACTActionMode(ActionMode):
             pred_action = action_chunk[0]
             action_chunk = action_chunk[1:]
             if first_action:
-                print("Current position:", qpos)
-                print("First action:", pred_action)
-                print("NEXT ACTIONS:", action_chunk)
+                # print("Current position:", qpos)
+                # print("First action:", pred_action)
+                # print("NEXT ACTIONS:", action_chunk)
                 first_action = False
             self.arm_action_mode.action(scene, pred_action)
             self.act_executor.iterate()  # Increase iteration to roll out executed poses. TODO: Should we remove this and call the model every step?
-            # print("Euclidean distance is:", self.euclidean_distance(obs_dict["gripper_pose"], action[:7]))
             # print("Current gripper pose:", obs_dict["gripper_pose"])
             # print("Target action:", action[:7])
             if (
@@ -83,6 +82,7 @@ class ACTActionMode(ActionMode):
             actions += 1
             prev_qpos = qpos
         ee_action = np.atleast_1d(action[7])
+        print("DEBUG GRIPPER OPEN:", ee_action[0])
         self.gripper_action_mode.action(scene, ee_action)
         self.last_action = action
 
@@ -94,7 +94,7 @@ class ACTActionMode(ActionMode):
         obs_dict = {k: v for k, v in obs_dict.items() if v is not None}
         return obs_dict
 
-    def get_image(self, obs):
+    def get_image_FIX(self, obs): # TODO: Call after fixes.
         all_cam_images = []
         obs_dict = self.get_obs_dict(obs)
         obs_dict = {
@@ -114,6 +114,23 @@ class ACTActionMode(ActionMode):
         # construct observations
         image_data = torch.stack(all_cam_images, axis=0)
         image_data[:, :3, :, :] = image_data[:, :3, :, :] / 255.0
+        return image_data
+
+    def get_image(self, obs):
+        all_cam_images = []
+        obs_dict = self.get_obs_dict(obs)
+        obs_dict = {
+            k: np.transpose(v, [2, 0, 1]) if v.ndim == 3 else np.expand_dims(v, 0)
+            for k, v in obs_dict.items()
+            if isinstance(v, (np.ndarray, list))
+        }
+
+        for cam_name in CAMERAS:
+            rgb = torch.from_numpy(obs_dict['%s_rgb' % cam_name]).float()
+            all_cam_images.append(rgb)
+        # construct observations
+        image_data = torch.stack(all_cam_images, axis=0)
+        image_data = image_data / 255.0
         return image_data
 
     def fill_key_point(self, keypoint, obs):
