@@ -3,12 +3,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import os
+import site
 from tqdm import tqdm
 
 from act.act_policy import ACTPolicy
 from act.tmp.utils import compute_dict_mean, detach_dict
+from general_manipulation.act_dataset import ACTDataset
 from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER
-from rvt.tmp_dataset import ACTDataset
 
 
 def main():
@@ -18,20 +19,26 @@ def main():
     NUM_VAL = 25
     NUM_WORKERS = 3
     EPOCHS = 3
-    TRAIN_REPLAY_STORAGE_DIR = "replay/replay_train"
-    TEST_REPLAY_STORAGE_DIR = "replay/replay_val"
     sample_distribution_mode = "transition_uniform"
     device = "cuda:0"
     tasks = ["close_jar"]  # Just testing from now.
     VAL_ITERATIONS = 100
     TRAINING_ITERATIONS = 20000 # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16))
-    CKPT_DIR = DATA_FOLDER + "/act_checkpoint"
+
+    rvt_package_path = get_package_path("rvt")
+    if rvt_package_path:
+        RVT_DATA_FOLDER = f"{rvt_package_path}/rvt/{DATA_FOLDER}"
+        CKPT_DIR = f"{RVT_DATA_FOLDER}/act_checkpoint"
+        TRAIN_REPLAY_STORAGE_DIR = f"{rvt_package_path}/rvt/replay/replay_train"
+        TEST_REPLAY_STORAGE_DIR = f"{rvt_package_path}/rvt/replay/replay_val"
+    else:
+        raise RuntimeError("rvt is not installed!!")
 
     train_dataset = ACTDataset(
         tasks,
         BATCH_SIZE_TRAIN,
         TRAIN_REPLAY_STORAGE_DIR,
-        DATA_FOLDER,
+        RVT_DATA_FOLDER,
         NUM_TRAIN,
         NUM_WORKERS,
         True,
@@ -43,7 +50,7 @@ def main():
         tasks,
         BATCH_SIZE_TRAIN,
         TEST_REPLAY_STORAGE_DIR,
-        DATA_FOLDER,
+        RVT_DATA_FOLDER,
         NUM_VAL,
         NUM_WORKERS,
         False,
@@ -104,8 +111,8 @@ def main():
 
 
 def train_bc(
-    train_dataloader,
-    val_dataloader,
+    train_dataset,
+    val_dataset,
     config,
     training_iterations,
     val_iterations,
@@ -132,11 +139,8 @@ def train_bc(
         with torch.inference_mode():
             policy.eval()
             epoch_dicts = []
-            # TODO: Rethink dataset. The circular buffer is blocking us to access by index.
-            data_iter = iter(val_dataloader.dataset.dataset)
-            for _ in range(val_iterations):
-                raw_data = next(data_iter)
-                data = val_dataloader.get_data(raw_data)
+            for _ in tqdm(range(val_iterations)):
+                data = val_dataset.get_data()
                 forward_dict = forward_pass(data, policy)
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
@@ -155,10 +159,8 @@ def train_bc(
         # training
         policy.train()
         optimizer.zero_grad()
-        data_iter = iter(train_dataloader.dataset.dataset)
-        for batch_idx in range(training_iterations):
-            raw_data = next(data_iter)
-            data = train_dataloader.get_data(raw_data)
+        for batch_idx in tqdm(range(training_iterations)):
+            data = train_dataset.get_data()
             forward_dict = forward_pass(data, policy)
             # backward
             loss = forward_dict["loss"]
@@ -166,7 +168,6 @@ def train_bc(
             optimizer.step()
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
-            print(f"Batch: {batch_idx}, loss: {loss}")
         epoch_summary = compute_dict_mean(
             train_history[(batch_idx + 1) * epoch : (batch_idx + 1) * (epoch + 1)]
         )
@@ -232,6 +233,21 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
         plt.title(key)
         plt.savefig(plot_path)
     print(f"Saved plots to {ckpt_dir}")
+
+
+def get_package_path(package_name):
+    for site_package_dir in site.getsitepackages():
+        # Check for direct package directory (usual case)
+        potential_path = os.path.join(site_package_dir, package_name)
+        if os.path.exists(potential_path):
+            return potential_path
+
+        # Check for egg-link (editable installs)
+        egg_link = os.path.join(site_package_dir, f"{package_name}.egg-link")
+        if os.path.exists(egg_link):
+            with open(egg_link, 'r') as f:
+                return f.readline().strip()
+    return None
 
 
 if __name__ == "__main__":
