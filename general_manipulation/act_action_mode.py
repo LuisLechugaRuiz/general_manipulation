@@ -19,58 +19,28 @@ class ACTActionMode(ActionMode):
         self.last_action = np.zeros(9,)
         self.threshold = 0.05
         self.images = 0  # TODO: Remove when we draw_circle_on_image.
-        self.keypoints = 0 # TODO: Remove later!
-        self.step_iterations = 20
 
     def action(self, scene: Scene, action: np.ndarray):
         target_reached = False
-
-        # DEBUG
-        obs = scene.get_observation()
-        obs_dict = self.get_obs_dict(obs)
-        gripper_pose = obs_dict["gripper_pose"]
-        # print(f"IT: {self.keypoints}, CURRENT POSE: {gripper_pose}, NEW KEYPOINT: {action}")
-        # print("DEBUG - Gripper open", obs_dict["gripper_open"])
-        self.keypoints += 1
-
         # Only fill key point if action is not equal to last, this is due to the stuck condition, remove it after.
         if self.euclidean_distance(self.last_action[:7], action[:7]) > 0.1:
             self.fill_key_point(action[:3], scene.get_observation())
-        first_action = True  # TODO :REMOVE
         stuck_iterations = 0
         actions = 0
         prev_qpos = np.zeros(7,)
         while not target_reached:
-            if actions % self.step_iterations == 0:
-                obs = scene.get_observation()
-                obs_dict = self.get_obs_dict(obs)
-                image_data = self.get_image(obs)
-                qpos = obs_dict["joint_positions"]
-                # print("QPOS:", qpos)
-                action_chunk = self.act_executor.step(
-                    qpos, image_data
-                ).cpu().numpy()
-            # print("PRED ACTION:", pred_action[0])
-            # TODO: REMOVE
-            pred_action = action_chunk[0]
-            action_chunk = action_chunk[1:]
-            if first_action:
-                # print("Current position:", qpos)
-                # print("First action:", pred_action)
-                # print("NEXT ACTIONS:", action_chunk)
-                first_action = False
+            obs = scene.get_observation()
+            obs_dict = self.get_obs_dict(obs)
+            image_data = self.get_image(obs)
+            qpos = obs_dict["joint_positions"]
+            pred_action = self.act_executor.step(
+                qpos, image_data
+            ).cpu().numpy()
             self.arm_action_mode.action(scene, pred_action)
-            self.act_executor.iterate()  # Increase iteration to roll out executed poses. TODO: Should we remove this and call the model every step?
-            # print("Current gripper pose:", obs_dict["gripper_pose"])
-            # print("Target action:", action[:7])
             if (
                 self.euclidean_distance(obs_dict["gripper_pose"][:3], action[:3])
                 < self.threshold
             ):
-                print("TARGET REACHED!, last action was:", pred_action)
-                gripper_pose = obs_dict["gripper_pose"]
-                diff = self.euclidean_distance(obs_dict["gripper_pose"][:3], action[:3])
-                print(f"IT: {self.keypoints}, CURRENT POSE: {gripper_pose}, KEYPOINT: {action}, DIFF: {diff}")
                 target_reached = True
             if (self.euclidean_distance(qpos, prev_qpos)) < 0.02:
                 stuck_iterations += 1
@@ -82,7 +52,6 @@ class ACTActionMode(ActionMode):
             actions += 1
             prev_qpos = qpos
         ee_action = np.atleast_1d(action[7])
-        print("DEBUG GRIPPER OPEN:", ee_action[0])
         self.gripper_action_mode.action(scene, ee_action)
         self.last_action = action
 
@@ -94,7 +63,7 @@ class ACTActionMode(ActionMode):
         obs_dict = {k: v for k, v in obs_dict.items() if v is not None}
         return obs_dict
 
-    def get_image_FIX(self, obs): # TODO: Call after fixes.
+    def get_image_FIX(self, obs):  # TODO: Call after fixes.
         all_cam_images = []
         obs_dict = self.get_obs_dict(obs)
         obs_dict = {

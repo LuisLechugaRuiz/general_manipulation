@@ -21,7 +21,7 @@ def main():
     EPOCHS = 3
     sample_distribution_mode = "transition_uniform"
     device = "cuda:0"
-    tasks = ["close_jar"]  # Just testing from now.
+    tasks = ["push_buttons"]  # Just testing from now.
     VAL_ITERATIONS = 100
     TRAINING_ITERATIONS = 20000 # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16))
 
@@ -66,8 +66,8 @@ def main():
     enc_layers = 4
     dec_layers = 7
     nheads = 8
-    dim_feedforward = 2048
-    hidden_dim = 256
+    dim_feedforward = 3200
+    hidden_dim = 512
     kl_weight = 10
     num_queries = 20
 
@@ -133,8 +133,33 @@ def train_bc(
 
     if not os.path.exists(ckpt_dir):
         os.makedirs(ckpt_dir)
-    for epoch in tqdm(range(num_epochs)):
+    ebar = tqdm(range(num_epochs))
+    for epoch in ebar:
         print(f"\nEpoch {epoch}")
+        # training
+        policy.train()
+        optimizer.zero_grad()
+        tbar = tqdm(range(training_iterations))
+        for batch_idx in tbar:
+            data = train_dataset.get_data()
+            forward_dict = forward_pass(data, policy)
+            # backward
+            loss = forward_dict["loss"]
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            train_history.append(detach_dict(forward_dict))
+            tbar.set_description(f"Loss: {loss.item():.4f}")
+        epoch_summary = compute_dict_mean(
+            train_history[(batch_idx + 1) * epoch : (batch_idx + 1) * (epoch + 1)]
+        )
+        epoch_train_loss = epoch_summary["loss"]
+        ebar.set_description(f"Train loss: {epoch_train_loss:.5f}")
+        summary_string = ""
+        for k, v in epoch_summary.items():
+            summary_string += f"{k}: {v.item():.3f} "
+        # print(summary_string)
+
         # validation
         with torch.inference_mode():
             policy.eval()
@@ -150,40 +175,18 @@ def train_bc(
             if epoch_val_loss < min_val_loss:
                 min_val_loss = epoch_val_loss
                 best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
-        print(f"Val loss:   {epoch_val_loss:.5f}")
+        ebar.set_description(f"Val loss:   {epoch_val_loss:.5f}")
         summary_string = ""
         for k, v in epoch_summary.items():
             summary_string += f"{k}: {v.item():.3f} "
-        print(summary_string)
-
-        # training
-        policy.train()
-        optimizer.zero_grad()
-        for batch_idx in tqdm(range(training_iterations)):
-            data = train_dataset.get_data()
-            forward_dict = forward_pass(data, policy)
-            # backward
-            loss = forward_dict["loss"]
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            train_history.append(detach_dict(forward_dict))
-        epoch_summary = compute_dict_mean(
-            train_history[(batch_idx + 1) * epoch : (batch_idx + 1) * (epoch + 1)]
-        )
-        epoch_train_loss = epoch_summary["loss"]
-        print(f"Train loss: {epoch_train_loss:.5f}")
-        summary_string = ""
-        for k, v in epoch_summary.items():
-            summary_string += f"{k}: {v.item():.3f} "
-        print(summary_string)
+        # print(summary_string)
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{epoch}_seed_{seed}.ckpt")
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
-    ckpt_path = os.path.join(ckpt_dir, f"policy_last.ckpt")
+    ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
     torch.save(policy.state_dict(), ckpt_path)
 
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
