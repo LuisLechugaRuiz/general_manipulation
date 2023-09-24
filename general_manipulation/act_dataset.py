@@ -65,6 +65,7 @@ class ACTDataset:
         qpos = (qpos - mean) / std
         actions = (actions - mean) / std
 
+        # self.save_image(image_data.numpy())
         return image_data, qpos, actions, is_pad
 
     def _reset_iterator(self):
