@@ -21,6 +21,7 @@ class ACTDataset:
         training,
         training_iterations,
         ckpt_dir,
+        device,
     ):
         super(ACTDataset).__init__()
         self.dataloader = get_act_dataset(
@@ -32,17 +33,27 @@ class ACTDataset:
             False,
             num_workers,
             training=training,
+            device=device,
         )
         self._iterator = iter(self.dataloader.dataset)
         self.norm_stats = self.get_norm_stats(
             training_iterations=training_iterations,
             ckpt_dir=ckpt_dir,
         )
+        self.device = device
 
     def get_data(self):
         sample = next(self._iterator)
-        return self._retrieve_data(sample)
+        batch = {
+            k: torch.tensor(v).to(self.device) if isinstance(v, np.ndarray) else v.to(self.device)
+            for k, v in sample.items()
+            if isinstance(v, (torch.Tensor, np.ndarray))
+        }
+        print("keys:", batch.keys())
+        return batch
+        #return self._retrieve_data(sample)
 
+    # TODO: REMOVE
     def _retrieve_data(self, sample):
         qpos = torch.from_numpy(sample["qpos"].squeeze(1))
         actions = torch.from_numpy(sample["actions"].squeeze(1))
