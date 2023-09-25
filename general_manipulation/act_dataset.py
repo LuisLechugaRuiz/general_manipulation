@@ -41,8 +41,10 @@ class ACTDataset:
 
     def get_data(self):
         sample = next(self._iterator)
-        return self._retrieve_data(sample)
+        return sample
+        #return self._retrieve_data(sample)
 
+    # TODO: REMOVE
     def _retrieve_data(self, sample):
         qpos = torch.from_numpy(sample["qpos"].squeeze(1))
         actions = torch.from_numpy(sample["actions"].squeeze(1))
