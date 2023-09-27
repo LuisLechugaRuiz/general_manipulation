@@ -8,7 +8,7 @@ from rvt.utils.peract_utils import (
     CAMERAS,
 )
 
-
+# TODO: REFACTOR! NORMALIZE DATA HERE BEFORE RETURNING THE SAMPLE
 class ACTDataset:
     def __init__(
         self,
@@ -49,7 +49,6 @@ class ACTDataset:
             for k, v in sample.items()
             if isinstance(v, (torch.Tensor, np.ndarray))
         }
-        print("keys:", batch.keys())
         return batch
         #return self._retrieve_data(sample)
 

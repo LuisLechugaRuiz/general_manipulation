@@ -21,6 +21,22 @@ class ACTActionMode(ActionMode):
         self.images = 0  # TODO: Remove when we draw_circle_on_image.
 
     def action(self, scene: Scene, action: np.ndarray):
+        all_actions = action[1, :] # TODO: Get the right all_action
+        pred_action = self.act_executor.step(
+            all_actions
+        ).cpu().numpy()
+        self.arm_action_mode.action(scene, pred_action)
+        obs = scene.get_observation()
+        obs_dict = self.get_obs_dict(obs)
+        # TODO: Add gripper action to act model!
+        if (
+            self.euclidean_distance(obs_dict["gripper_pose"][:3], action[:3])
+            < self.threshold
+        ):
+            ee_action = np.atleast_1d(action[7])
+            self.gripper_action_mode.action(scene, ee_action)
+
+    def action_OLD(self, scene: Scene, action: np.ndarray):
         target_reached = False
         # Only fill key point if action is not equal to last, this is due to the stuck condition, remove it after.
         if self.euclidean_distance(self.last_action[:7], action[:7]) > 0.1:
@@ -63,7 +79,7 @@ class ACTActionMode(ActionMode):
         obs_dict = {k: v for k, v in obs_dict.items() if v is not None}
         return obs_dict
 
-    def get_image_FIX(self, obs):  # TODO: Call after fixes.
+    def get_image_OLD(self, obs):  # TODO: Call after fixes.
         all_cam_images = []
         obs_dict = self.get_obs_dict(obs)
         obs_dict = {
@@ -176,5 +192,6 @@ class ACTActionMode(ActionMode):
         plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
         plt.close(fig)  # Close the figure
 
+    # TODO: Add correct shape (with act output addition)
     def action_shape(self, scene: Scene):
         return (9,)

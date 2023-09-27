@@ -24,7 +24,7 @@ def main():
     device = "cuda:0"
 
     # From config:
-    BATCH_SIZE_TRAIN = 3
+    BATCH_SIZE_TRAIN = 2
     NUM_TRAIN = 100
     NUM_VAL = 25
     NUM_WORKERS = 3

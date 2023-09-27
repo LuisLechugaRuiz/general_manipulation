@@ -222,19 +222,17 @@ class ACTModel(nn.Module):
         _, _, _d, _h, _w = ins.shape
         p = self.proprio_preprocess(
             proprio
-        )  # [B,4] -> [B,64] # TODO: Change to [B,7] -> [B, 64]
+        )  # [B,4] -> [B,64]
         p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
         ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
         # concat latent
-        print("LATENT SHAPE:", latent.shape)
         latent_processed = (
             latent.unsqueeze(-1)
             .unsqueeze(-1)
             .unsqueeze(-1)
             .repeat(1, 1, _d, _h, _w)
         )
-        print("INS SHAPE:", ins.shape)
         ins = torch.cat([ins, latent_processed], dim=1)
 
         # channel last
@@ -263,15 +261,15 @@ class ACTModel(nn.Module):
         # Commented as we want to maintain attn_dim (512) instead of reshaping to input_dim_before_seq.
         # x = self.fc_aft_attn(x)
 
-        # TODO: Ensure that x dim is compatible with encoder dims.
+        pos = self.pos_embed_decoder.transpose(0, 1).repeat(1, bs, 1)
+        memory = x.transpose(0, 1)
 
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
         tgt = torch.zeros_like(query_embed)
         hs = self.decoder(
-            tgt=tgt, memory=x, pos=self.pos_embed_decoder, query_pos=query_embed
+            tgt=tgt, memory=memory, pos=pos, query_pos=query_embed
         )
-        hs = hs.transpose(1, 2)
-
+        hs = hs.transpose(1, 2)[0]  # Get last layer output
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
 

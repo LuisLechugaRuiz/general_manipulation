@@ -10,6 +10,7 @@ class ACTExecutor:
         self.max_size = max_size
         self.all_time_actions = torch.zeros([num_queries, num_queries, state_dim]).cuda()
 
+    # TODO: Move this to RVT Agent (add auxiliar class to normalize data)
     def _pre_process(self, qpos):
         return (
             qpos - self.norm_stats["joint_abs_position_mean"].cuda()
@@ -45,12 +46,7 @@ class ACTExecutor:
         raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
         return raw_action
 
-    def step(self, qpos, image):
-        qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-        image = image.cuda().unsqueeze(0)
-        qpos = self._pre_process(qpos)
-        all_actions = self.policy(qpos, image)
+    def step(self, all_actions):
         raw_action = self._temporal_ensembling(all_actions)
         raw_action = raw_action.squeeze(0).cuda()
-        action = self._post_process(raw_action)
         return action
