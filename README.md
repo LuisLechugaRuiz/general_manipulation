@@ -2,54 +2,37 @@
 
 ## Introduction
 
-In the domain of robot learning and manipulation, view-based methods have achieved remarkable success in tasks like pick-and-place and object rearrangements. However, there's a challenge when it comes to tasks requiring advanced 3D reasoning. This project aims to combine two groundbreaking approaches: Robotic View Transformer (RVT) and Action Chunking (ACT) to address these challenges.
+In the realm of robot learning and manipulation, view-based methods have demonstrated significant success, especially in tasks such as pick-and-place and object rearrangements. Nonetheless, tasks necessitating sophisticated 3D reasoning remain a challenge. This project endeavors to amalgamate two innovative approaches: the Robotic View Transformer [RVT](https://robotic-view-transformer.github.io/) and Action Chunking [ACT](https://tonyzhaozh.github.io/aloha), aiming to tackle these intricate challenges.
 
 ## Overview
 
 1. **Robotic View Transformer (RVT)**:
-    - **Purpose**: RVT acts as a global planner. It employs a multi-view transformer to understand the environment and predict the target pose required for a complex motion.
-    - **Advantage**: It is view-based, hence scalable and computationally efficient compared to voxel-based methods.
+    - **Purpose**: Serving as a global planner, RVT utilizes a multi-view transformer to comprehend the environment and foretell the requisite target pose for executing intricate motion.
+    - **Advantage**: As a view-based method, RVT offers scalability and computational efficiency, distinguishing itself from voxel-based alternatives.
 2. **Action Chunking (ACT)**:
-    - **Purpose**: ACT is the local planner. Given a target pose from RVT, ACT creates a trajectory to achieve that pose through action chunking.
-    - **Advantage**: Efficient high-frequency action predictions for complex motions.
+    - **Purpose**: ACT, acting as the local planner, formulates a trajectory to reach the target pose provided by RVT through the technique of action chunking.
+    - **Advantage**: ACT is renowned for its proficiency in predicting high-frequency actions for complex motions.
 
-## Architecture Design
+#### Architecture Design
 
-### Step 1: RVT - Global Planner
+This project brings together the Robotic View Transformer (RVT) and Action Chunking (ACT), aiming to enhance robotic capabilities for tasks demanding intricate 3D reasoning.
 
-- **Input**: Multi-view images of the scene and a natural language instruction.
-- **Process**: The transformer jointly attends over multiple views, aggregates information, and then predicts the robot end-effector pose.
-- **Output**: Target pose.
+1. **RVT - Perception and Environment Understanding**
+    - **Input:** Multi-view images of the scene and natural language instructions.
+    - **Process:** RVT employs a multi-view transformer for joint attention across views, understanding the environment, and predicting the end-effector's target pose.
+    - **Output:** RVT outputs an 8-dimensional action, which includes the 6-DoF target end-effector pose, 1-DoF gripper state, and a binary collision indicator.
 
-### Step 2: ACT - Local Planner
+2. **ACT - Action Planning and Execution**
+    - **Input:** The input is strategically modified by incorporating multi-view images, enhanced with RVT’s heatmap as an additional channel. This alteration aligns with the rendering technique used by RVT, ensuring consistency and enriched information flow between the global and local planners. Furthermore, a shift is made in proprioceptive information, transitioning from the gripper pose to joint absolute positions, thereby optimizing the input composition for improved trajectory planning.
+    - **Process:** The CVAE encoder processes the current joint positions and the target action sequence to infer the style variable ‘z’. This variable, along with the image tokens and the proprioceptive information processed through an MLP, is fed into the joint transformer. The joint transformer features eight self-attention layers; the first four layers are dedicated to processing individual images by restricting attention to tokens within the same image. The subsequent four layers facilitate information propagation and accumulation across different images, synthesizing this diverse information for further action planning.
+    - **Output:** A dedicated decoder translates the synthesized information into sequences of actions, forming action chunks aligned with the 7-DoF robot arm's joint absolute positions.
 
-- **Input**: Target pose from RVT and camera image.
-- **Process**: Uses CVAE and action chunking techniques to predict actions on high frequency.
-- **Output**: Trajectory or action chunks to achieve the target pose.
+#### Implementation
 
-## Implementation
+- **Input Modification and Enriched Rendering:** The implementation strategy involves integrating the heatmap produced by RVT as an additional channel to the virtual images and adjusting the proprioceptive input from the gripper pose to joint absolute positions.
 
-1. Integrate RVT to receive multi-view images and produce the desired pose.
-2. Pass the output of RVT as an input to ACT.
-3. Ensure the end-to-end training of the combined model, allowing joint optimization of RVT and ACT.
+- **Action Chunking Prediction with CVAE and Joint Transformer:** The system leverages the CVAE encoder to process joint positions and target action sequences, inferring the style variable ‘z’. This variable is concatenated with image tokens and processed proprioceptive information, serving as input to the joint transformer. The transformer acts as an encoder combining the virtual images, pointcloud, latent representation from CVAE, and proprioceptive information, culminating in the synthesis of diverse inputs.
 
-## Challenges
+#### Future Directions
 
-- Effective integration of RVT and ACT.
-- Ensuring the RVT output contains enough information for ACT predictions.
-- Managing computational costs and optimizing hyperparameters.
-- Potential risk of overfitting with a complex model.
-
-## Future Steps: Integrating Vision Language Model (VLM)
-
-To further enhance our model, we aim to integrate a Vision Language Model (VLM) as an input to RVT.
-
-**Objective**: The VLM will disambiguate instructions and allow the robot to generalize from natural language instructions. This way, we can leverage both language understanding and image processing.
-
-**How It Works**:
-1. **Input**: Natural language instruction along with multi-view images.
-2. **VLM Process**: Understands and extracts actionable insights from the instructions.
-3. **RVT Process**: Utilizes both the actionable insights from VLM and the images to produce a more refined target pose.
-4. **ACT Process**: Continues as before, generating a trajectory to achieve the target pose.
-
-This will pave the way for a more interactive and adaptable robotic system that can understand and execute complex tasks through both visual cues and natural language instructions.
+- **Vision Language Model (VLM) Integration:** Integrating a Vision Language Model (VLM) is a prospective step to further refine the system. VLM will interpret and extract actionable insights from natural language instructions, enabling the robot to comprehend and generalize from linguistic cues. This addition aims to bridge linguistic understanding and visual perception, contributing to the development of a more adaptive and interactive robotic system.
