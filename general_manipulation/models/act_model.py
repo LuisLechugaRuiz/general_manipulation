@@ -217,12 +217,11 @@ class ACTModel(nn.Module):
             .transpose(1, 2)
             .clone()
         )
-
         # concat proprio
         _, _, _d, _h, _w = ins.shape
         p = self.proprio_preprocess(
             proprio
-        )  # [B,4] -> [B,64]
+        )  # [B,7] -> [B,64]
         p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
         ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 

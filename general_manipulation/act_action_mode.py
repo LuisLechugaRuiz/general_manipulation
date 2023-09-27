@@ -21,7 +21,11 @@ class ACTActionMode(ActionMode):
         self.images = 0  # TODO: Remove when we draw_circle_on_image.
 
     def action(self, scene: Scene, action: np.ndarray):
-        all_actions = action[1, :] # TODO: Get the right all_action
+        # Extract the flattened act_action from continuous_action starting from index 9
+        flattened_act_action = action[9:]
+
+        # Reshape it back to its original shape (20, 7)
+        all_actions = flattened_act_action.reshape((20, 7))
         pred_action = self.act_executor.step(
             all_actions
         ).cpu().numpy()

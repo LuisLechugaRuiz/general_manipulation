@@ -3,8 +3,7 @@ import numpy as np
 
 
 class ACTExecutor:
-    def __init__(self, policy, norm_stats, state_dim, num_queries, max_size=100):
-        self.policy = policy
+    def __init__(self, norm_stats, state_dim, num_queries, max_size=100):
         self.norm_stats = norm_stats
         self.num_queries = num_queries
         self.max_size = max_size
@@ -47,6 +46,7 @@ class ACTExecutor:
         return raw_action
 
     def step(self, all_actions):
+        all_actions = torch.tensor(all_actions).cuda().unsqueeze(0)
         raw_action = self._temporal_ensembling(all_actions)
         raw_action = raw_action.squeeze(0).cuda()
-        return action
+        return raw_action
