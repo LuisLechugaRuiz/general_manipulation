@@ -5,29 +5,24 @@ import torch
 import os
 import site
 from tqdm import tqdm
-import yaml
 
 from act.tmp.utils import compute_dict_mean, detach_dict
 
-import rvt.config as default_exp_cfg
-import rvt.models.rvt_agent as rvt_agent
-import rvt.mvt.config as default_mvt_cfg
-from rvt.mvt.mvt import MVT
-from rvt.utils.rvt_utils import load_agent as load_agent_state
-from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER, SCENE_BOUNDS, IMAGE_SIZE
+from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER
 
 from general_manipulation.act_dataset import ACTDataset
-import general_manipulation.act_config as default_act_cfg
+from general_manipulation.utils import get_act_agent, load_rvt_agent
 
 
 def main():
     device = "cuda:0"
 
-    # From config:
+    # From config: -> TODO: GET FROM CONFIG!!
     BATCH_SIZE_TRAIN = 2
     NUM_TRAIN = 100
     NUM_VAL = 25
     NUM_WORKERS = 3
+    NUM_IMAGES = 5
     EPOCHS = 3
     tasks = ["push_buttons"]  # Just testing from now.
     VAL_ITERATIONS = 100
@@ -42,12 +37,16 @@ def main():
     else:
         raise RuntimeError("rvt is not installed!!")
 
+    rvt_agent = load_rvt_agent(device=device)
+    rvt_agent.load_clip()
     train_dataset = ACTDataset(
+        rvt_agent,
         tasks,
         BATCH_SIZE_TRAIN,
         TRAIN_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_TRAIN,
+        NUM_IMAGES,
         NUM_WORKERS,
         True,
         TRAINING_ITERATIONS,
@@ -56,16 +55,18 @@ def main():
     )
 
     test_dataset = ACTDataset(
+        rvt_agent,
         tasks,
         BATCH_SIZE_TRAIN,
         TEST_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_VAL,
+        NUM_IMAGES,
         NUM_WORKERS,
         False,
         TRAINING_ITERATIONS,
         CKPT_DIR,
-        device
+        device,
     )
 
     config = {
@@ -76,11 +77,12 @@ def main():
         "ckpt_dir": CKPT_DIR,
         "seed": 0,
     }
-    rvt_folder = f"{rvt_package_path}/rvt"
-    agent = load_agent(rvt_folder, device)
+    cos_dec_max_step = EPOCHS * TRAINING_ITERATIONS
+    act_agent = get_act_agent(device=device, cos_dec_max_step=cos_dec_max_step)
+    act_agent.build(training=True, device=device)
 
     best_ckpt_info = train_bc(
-        agent,
+        act_agent,
         train_dataset,
         test_dataset,
         config,
@@ -96,7 +98,7 @@ def main():
 
 
 def train_bc(
-    agent,
+    act_agent,
     train_dataset,
     val_dataset,
     config,
@@ -106,10 +108,6 @@ def train_bc(
     num_epochs = config["num_epochs"]
     ckpt_dir = config["ckpt_dir"]
     seed = config["seed"]
-
-    optimizer = torch.optim.AdamW(
-        agent._network.act_model.parameters(), lr=0.0001, weight_decay=0.0001
-    )
 
     train_history = []
     validation_history = []
@@ -122,17 +120,21 @@ def train_bc(
     for epoch in ebar:
         print(f"\nEpoch {epoch}")
         # training
-        agent._network.act_model.train()
-        optimizer.zero_grad()
+        act_agent.act_model.train()
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            forward_dict = agent.train_act(data)
-            # backward
+            heatmap = data["heatmap"].squeeze(1)
+            heatmap = heatmap.view(
+                heatmap.shape[0] * heatmap.shape[1],
+                heatmap.shape[2],
+                heatmap.shape[3],
+                heatmap.shape[4],
+            )
+            forward_dict = act_agent.update(
+                observation=data, heatmap=heatmap, eval=False
+            )
             loss = forward_dict["loss"]
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
             tbar.set_description(f"Loss: {loss.item():.4f}")
         epoch_summary = compute_dict_mean(
@@ -147,11 +149,13 @@ def train_bc(
 
         # validation
         with torch.inference_mode():
-            agent._network.act_model.eval()
+            act_agent.act_model.eval()
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
-                forward_dict = agent.train_act(data)
+                forward_dict = act_agent.update(
+                    observation=data, hm=data["heatmap"], eval=True
+                )
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
             validation_history.append(epoch_summary)
@@ -162,7 +166,7 @@ def train_bc(
                 best_ckpt_info = (
                     epoch,
                     min_val_loss,
-                    deepcopy(agent._network.act_model.state_dict()),
+                    deepcopy(act_agent.act_model.state_dict()),
                 )
         ebar.set_description(f"Val loss:   {epoch_val_loss:.5f}")
         summary_string = ""
@@ -172,11 +176,11 @@ def train_bc(
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{epoch}_seed_{seed}.ckpt")
-            torch.save(agent._network.act_model.state_dict(), ckpt_path)
+            torch.save(act_agent.act_model.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
     ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
-    torch.save(agent._network.act_model.state_dict(), ckpt_path)
+    torch.save(act_agent.act_modell.state_dict(), ckpt_path)
 
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
     ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{best_epoch}_seed_{seed}.ckpt")
@@ -189,70 +193,6 @@ def train_bc(
     plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed)
 
     return best_ckpt_info
-
-
-def load_agent(
-    rvt_folder,
-    device,
-    use_input_place_with_mean=False,
-):
-    model_folder = f"{rvt_folder}/runs/rvt"
-    model_name = "model_14.pth"
-    log_name = "test/1"
-    eval_log_dir = os.path.join(model_folder, "eval", log_name)
-    model_path = os.path.join(model_folder, model_name)
-    exp_cfg_path = None
-    mvt_cfg_path = None
-    eval_log_dir = None
-
-    # load exp_cfg
-    model_folder = os.path.join(os.path.dirname(model_path))
-
-    exp_cfg = default_exp_cfg.get_cfg_defaults()
-    if exp_cfg_path is not None:
-        exp_cfg.merge_from_file(exp_cfg_path)
-    else:
-        exp_cfg.merge_from_file(os.path.join(model_folder, "exp_cfg.yaml"))
-
-    # WARNING NOTE: a temporary hack to use place_with_mean in evaluation
-    if not use_input_place_with_mean:
-        exp_cfg.rvt.place_with_mean = True
-    exp_cfg.freeze()
-
-    mvt_cfg = default_mvt_cfg.get_cfg_defaults()
-    if mvt_cfg_path is not None:
-        mvt_cfg.merge_from_file(mvt_cfg_path)
-    else:
-        mvt_cfg.merge_from_file(os.path.join(model_folder, "mvt_cfg.yaml"))
-    mvt_cfg.freeze()
-
-    act_cfg = default_act_cfg.get_cfg_defaults()
-    act_cfg.freeze()
-    act_cfg_dict = yaml.safe_load(act_cfg.dump())
-
-    rvt = MVT(
-        renderer_device=device,
-        act_cfg_dict=act_cfg_dict,
-        **mvt_cfg,
-    )
-
-    agent = rvt_agent.RVTAgent(
-        network=rvt.to(device),
-        image_resolution=[IMAGE_SIZE, IMAGE_SIZE],
-        add_lang=mvt_cfg.add_lang,
-        scene_bounds=SCENE_BOUNDS,
-        cameras=CAMERAS,
-        log_dir=f"{eval_log_dir}/eval_run",
-        **exp_cfg.peract,
-        **exp_cfg.rvt,
-    )
-
-    agent.build(training=False, device=device)
-    load_agent_state(model_path, agent)
-
-    print("Agent Information")
-    print(agent)
-    return agent
 
 
 def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):

@@ -12,11 +12,13 @@ from rvt.utils.peract_utils import (
 class ACTDataset:
     def __init__(
         self,
+        rvt_agent,
         tasks,
         batch_size,
         replay_storage_dir,
         data_folder,
         num_demos,
+        num_images,
         num_workers,
         training,
         training_iterations,
@@ -25,11 +27,13 @@ class ACTDataset:
     ):
         super(ACTDataset).__init__()
         self.dataloader = get_act_dataset(
+            rvt_agent,
             tasks,
             batch_size,
             replay_storage_dir,
             data_folder,
             num_demos,
+            num_images,
             False,
             num_workers,
             training=training,
@@ -54,7 +58,7 @@ class ACTDataset:
 
     # TODO: REMOVE
     def _retrieve_data(self, sample):
-        qpos = torch.from_numpy(sample["qpos"].squeeze(1))
+        joint_positions = torch.from_numpy(sample["joint_positions"].squeeze(1))
         actions = torch.from_numpy(sample["actions"].squeeze(1))
         is_pad = torch.from_numpy(sample["is_pad"].squeeze(1))
         # new axis for different cameras
@@ -72,11 +76,11 @@ class ACTDataset:
         std = self.norm_stats["joint_abs_position_std"]
         # image_data[:, :, :3, :, :] = image_data[:, :, :3, :, :] / 255.0 TODO: Enable after fix.
         image_data = image_data / 255.0
-        qpos = (qpos - mean) / std
+        joint_positions = (joint_positions - mean) / std
         actions = (actions - mean) / std
 
         # self.save_image(image_data.numpy())
-        return image_data, qpos, actions, is_pad
+        return image_data, joint_positions, actions, is_pad
 
     def _reset_iterator(self):
         self._iterator = iter(self._replay_dataset)

@@ -35,6 +35,20 @@ _C.num_encoder_layers = 4
 _C.num_decoder_layers = 7
 _C.normalize_before = False
 _C.kl_weight = 10
+_C.num_images = 5
+_C.debug = True
+
+# Copied from peral - rvt
+_C.lambda_weight_l2 = 1e-6
+# lr should be thought on per sample basis
+# effective lr is multiplied by bs * num_devices
+_C.lr = 2.5e-5
+_C.optimizer_type = "lamb"
+_C.warmup_steps = 0
+_C.lr_cos_dec = False
+_C.add_rgc_loss = True
+_C.place_with_mean = True
+_C.move_pc_in_bound = True
 
 
 def get_cfg_defaults():

@@ -14,6 +14,10 @@ from rvt.mvt.attn import (
 )
 from general_manipulation.models.act_cvae import ACTCVAE
 
+# Debug
+import cv2
+import numpy as np
+
 
 class ACTModel(nn.Module):
     def __init__(
@@ -24,6 +28,8 @@ class ACTModel(nn.Module):
         """MultiView Transfomer adapted to run ACT."""
 
         super().__init__()
+        self.add_depth = cfg_dict["add_depth"]
+        self.add_corr = cfg_dict["add_corr"]
         self.depth = cfg_dict["depth"]
         self.activation = cfg_dict["activation"]
         self.img_feat_dim = cfg_dict["img_feat_dim"]
@@ -42,6 +48,7 @@ class ACTModel(nn.Module):
         self.num_decoder_layers = cfg_dict["num_decoder_layers"]
         self.normalize_before = cfg_dict["normalize_before"]
         self.kl_weight = cfg_dict["kl_weight"]
+        self.debug = cfg_dict["debug"]
 
         print(f"ACTModel Vars: {vars(self)}")
 
@@ -71,17 +78,7 @@ class ACTModel(nn.Module):
         )
 
         inp_img_feat_dim = self.img_feat_dim
-        inp_img_feat_dim += 8  # 3 corr + 3 pixel loc + 1 depth + 1 heatmap
-        self.pixel_loc = torch.zeros((self.num_img, 3, self.img_size, self.img_size))
-        self.pixel_loc[:, 0, :, :] = (
-            torch.linspace(-1, 1, self.num_img).unsqueeze(-1).unsqueeze(-1)
-        )
-        self.pixel_loc[:, 1, :, :] = (
-            torch.linspace(-1, 1, self.img_size).unsqueeze(0).unsqueeze(-1)
-        )
-        self.pixel_loc[:, 2, :, :] = (
-            torch.linspace(-1, 1, self.img_size).unsqueeze(0).unsqueeze(0)
-        )
+        inp_img_feat_dim += 5  # 3 corr + 1 depth + 1 heatmap
 
         # img input preprocessing encoder
         self.input_preprocess = Conv2DBlock(
@@ -169,19 +166,28 @@ class ACTModel(nn.Module):
         self.action_head = nn.Linear(self.attn_dim, self.state_dim)
         self.is_pad_head = nn.Linear(self.attn_dim, 1)
 
+        if self.debug:
+            self.frames = {}
+            self.img_frames = {}
+            self.num_steps = 100  # TODO: Don't finish on hardcode value, trigger end from outside.
+            self.output_filename = 'output.avi'
+
     def forward(
         self,
         img,
+        heatmap,
         proprio=None,
         actions=None,
         is_pad=None,
     ):
         """
         :param img: tensor of shape (bs, num_img, img_feat_dim, h, w)
+        :param heatmap: tensor of shape (bs, num_img, 1, h, w)
         :param proprio: tensor of shape (bs, proprio_dim)
         :param actions: batch, seq, action_dim
         :param is_pad: batch, seq, 1
         """
+        img = self.add_heatmap(img, heatmap)
 
         bs, num_img, img_feat_dim, h, w = img.shape
         num_pat_img = h // self.img_patch_size
@@ -283,7 +289,66 @@ class ACTModel(nn.Module):
             loss_dict["kl"] = total_kld[0]
             loss_dict["loss"] = (
                 loss_dict["l1"] + loss_dict["kl"] * self.kl_weight
-            )  # TODO: Add kl weight
+            )
             return loss_dict
         else:
             return a_hat, is_pad_hat, [mu, logvar]
+
+    def add_heatmap(self, img, heatmap):
+        bs = img.shape[0]
+        num_channels = heatmap.shape[1]
+        height = heatmap.shape[2]
+        width = heatmap.shape[3]
+
+        if self.debug:
+            self.record(img=img, heatmap=heatmap)  # Record video - Image + heatmap while debugging.
+
+        heatmap = heatmap.view(
+            bs, self.num_img, num_channels, height, width
+        )  # [bs * self.num_img, 1, h, w] -> [bs, self.num_img, 1, h, w]
+        img = torch.cat((img, heatmap), dim=2)
+        return img
+
+    def record(self, img=None, heatmap=None):
+        bs = img.shape[0]
+        for i in range(bs):
+            for j in range(self.num_img):
+                single_img = img[i, j, 3:6].cpu().numpy()
+                single_img = (single_img * 255).astype(np.uint8)
+                single_img = np.transpose(single_img, (1, 2, 0))
+                single_heatmap = heatmap[i, j].cpu().squeeze().numpy()
+
+                single_heatmap = cv2.normalize(single_heatmap, None, 0, 255, cv2.NORM_MINMAX)
+                single_heatmap_colored = cv2.applyColorMap(single_heatmap.astype(np.uint8), cv2.COLORMAP_JET).astype(np.uint8)
+                overlay = cv2.addWeighted(single_img, 0.6, single_heatmap_colored, 0.4, 0)
+
+                if j not in self.frames:
+                    self.frames[j] = []
+                    self.img_frames[j] = []
+                self.frames[j].append(overlay)
+                self.img_frames[j].append(single_img)
+
+        # If the number of steps is reached, create the video
+        if all(len(frames) >= self.num_steps for frames in self.frames.values()):
+            self.create_videos()
+            self.frames = {}  # Clear the frames
+            self.img_frames = {}
+
+    def create_videos(self):
+        for camera_idx, frames in self.frames.items():
+            if frames:
+                self.create_video(frames, f"video_camera_{camera_idx}.avi")
+
+        for camera_idx, img_frames in self.img_frames.items():
+            if img_frames:
+                self.create_video(img_frames, f"video_camera_{camera_idx}_img_only.avi")
+
+    def create_video(self, frames, output_filename):
+        height, width, _ = frames[0].shape
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        video_out = cv2.VideoWriter(output_filename, fourcc, 20.0, (width, height))
+
+        for frame in frames:
+            video_out.write(frame)
+
+        video_out.release()
