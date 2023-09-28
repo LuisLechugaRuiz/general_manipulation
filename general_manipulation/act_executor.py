@@ -1,16 +1,20 @@
 import torch
 import numpy as np
 
-from general_manipulation.utils import get_act_agent
+from rvt.utils.peract_utils import CAMERAS
 
 
 class ACTExecutor:
-    def __init__(self, norm_stats, state_dim, num_queries, device, max_size=100):
+    def __init__(
+        self, act_agent, norm_stats, state_dim, num_queries, max_size=100
+    ):
         self.norm_stats = norm_stats
         self.num_queries = num_queries
         self.max_size = max_size
-        self.all_time_actions = torch.zeros([num_queries, num_queries, state_dim]).cuda()
-        self.act_agent = get_act_agent(device=device)
+        self.all_time_actions = torch.zeros(
+            [num_queries, num_queries, state_dim]
+        ).cuda()
+        self.act_agent = act_agent
 
     # TODO: Move this to ACT Agent (add auxiliar class to normalize data)
     def _pre_process(self, joint_positions):
@@ -48,9 +52,9 @@ class ACTExecutor:
         raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
         return raw_action
 
-    def step(self, observation):
-        a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation)
-        all_actions = torch.tensor(a_hat).cuda().unsqueeze(0)
-        raw_action = self._temporal_ensembling(all_actions)
+    def step(self, observation, heatmap):
+        heatmap = torch.tensor(heatmap).cuda()
+        a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation, heatmap)
+        raw_action = self._temporal_ensembling(a_hat)
         raw_action = raw_action.squeeze(0).cuda()
         return raw_action

@@ -26,7 +26,8 @@ def main():
     EPOCHS = 3
     tasks = ["push_buttons"]  # Just testing from now.
     VAL_ITERATIONS = 100
-    TRAINING_ITERATIONS = 20000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16))
+    # TRAINING_ITERATIONS = 20000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16))
+    TRAINING_ITERATIONS = int(10000 // (BATCH_SIZE_TRAIN / 16))
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
@@ -124,13 +125,7 @@ def train_bc(
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            heatmap = data["heatmap"].squeeze(1)
-            heatmap = heatmap.view(
-                heatmap.shape[0] * heatmap.shape[1],
-                heatmap.shape[2],
-                heatmap.shape[3],
-                heatmap.shape[4],
-            )
+            heatmap = get_heatmap(data)
             forward_dict = act_agent.update(
                 observation=data, heatmap=heatmap, eval=False
             )
@@ -153,8 +148,9 @@ def train_bc(
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
+                heatmap = get_heatmap(data)
                 forward_dict = act_agent.update(
-                    observation=data, hm=data["heatmap"], eval=True
+                    observation=data, heatmap=heatmap, eval=True
                 )
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
@@ -180,7 +176,7 @@ def train_bc(
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
     ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
-    torch.save(act_agent.act_modell.state_dict(), ckpt_path)
+    torch.save(act_agent.act_model.state_dict(), ckpt_path)
 
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
     ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{best_epoch}_seed_{seed}.ckpt")
@@ -233,6 +229,17 @@ def get_package_path(package_name):
             with open(egg_link, "r") as f:
                 return f.readline().strip()
     return None
+
+
+def get_heatmap(observation):
+    heatmap = observation["heatmap"].squeeze(1)
+    heatmap = heatmap.view(
+        heatmap.shape[0] * heatmap.shape[1],
+        heatmap.shape[2],
+        heatmap.shape[3],
+        heatmap.shape[4],
+    )
+    return heatmap
 
 
 if __name__ == "__main__":

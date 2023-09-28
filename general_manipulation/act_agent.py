@@ -21,7 +21,10 @@ class ACTAgent:
         scene_bounds: list = peract_utils.SCENE_BOUNDS,
         cameras: list = peract_utils.CAMERAS,
     ):
-        self.act_model = ACTModel(cfg_dict=cfg_dict, num_img=cfg_dict["num_images"]).to(device)
+        self.device = device
+        self.act_model = ACTModel(cfg_dict=cfg_dict, num_img=cfg_dict["num_images"]).to(
+            device
+        )
         self.move_pc_in_bound = cfg_dict["move_pc_in_bound"]
         self._place_with_mean = cfg_dict["place_with_mean"]
         self.scene_bounds = scene_bounds
@@ -42,9 +45,9 @@ class ACTAgent:
         self._training = False
 
     def update(self, observation, heatmap, eval: bool = False):
-        obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
-
         with torch.no_grad():
+            obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
+
             pc, img_feat = rvt_utils.get_pc_img_feat(
                 obs,
                 pcd,
@@ -67,10 +70,6 @@ class ACTAgent:
                 rev_trans.append(b)
             pc = pc_new
 
-            proprio_joint_abs = observation["joint_positions"].squeeze(1)
-            actions = observation["actions"].squeeze(1)
-            is_pad = observation["is_pad"].squeeze(1)
-
             img = self.render(
                 pc=pc,
                 img_feat=img_feat,
@@ -78,12 +77,24 @@ class ACTAgent:
                 dyn_cam_info=None,
             )
 
+        actions = observation.get("actions", None)
+        if actions is not None:
+            actions = actions.squeeze(1)
+        is_pad = observation.get("is_pad", None)
+        if is_pad is not None:
+            is_pad = is_pad.squeeze(1)
+        proprio_joint_abs = observation["joint_positions"].squeeze(1)
+
         use_grad = self._training and not eval
         with torch.set_grad_enabled(use_grad):
             act_out = self.act_model(
-                img=img, heatmap=heatmap, proprio=proprio_joint_abs, actions=actions, is_pad=is_pad
+                img=img,
+                heatmap=heatmap,
+                proprio=proprio_joint_abs,
+                actions=actions,
+                is_pad=is_pad,
             )
-        if self._training:
+        if use_grad:
             # backward
             loss = act_out["loss"]
             loss.backward()

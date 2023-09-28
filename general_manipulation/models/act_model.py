@@ -28,6 +28,7 @@ class ACTModel(nn.Module):
         """MultiView Transfomer adapted to run ACT."""
 
         super().__init__()
+        self.add_pixel_loc = cfg_dict["add_pixel_loc"]
         self.add_depth = cfg_dict["add_depth"]
         self.add_corr = cfg_dict["add_corr"]
         self.depth = cfg_dict["depth"]
@@ -300,12 +301,13 @@ class ACTModel(nn.Module):
         height = heatmap.shape[2]
         width = heatmap.shape[3]
 
-        if self.debug:
-            self.record(img=img, heatmap=heatmap)  # Record video - Image + heatmap while debugging.
-
         heatmap = heatmap.view(
             bs, self.num_img, num_channels, height, width
         )  # [bs * self.num_img, 1, h, w] -> [bs, self.num_img, 1, h, w]
+
+        if self.debug:
+            self.record(img=img, heatmap=heatmap)  # Record video - Image + heatmap while debugging.
+
         img = torch.cat((img, heatmap), dim=2)
         return img
 
@@ -320,7 +322,7 @@ class ACTModel(nn.Module):
 
                 single_heatmap = cv2.normalize(single_heatmap, None, 0, 255, cv2.NORM_MINMAX)
                 single_heatmap_colored = cv2.applyColorMap(single_heatmap.astype(np.uint8), cv2.COLORMAP_JET).astype(np.uint8)
-                overlay = cv2.addWeighted(single_img, 0.6, single_heatmap_colored, 0.4, 0)
+                overlay = cv2.addWeighted(single_img, 0.4, single_heatmap_colored, 0.6, 0)
 
                 if j not in self.frames:
                     self.frames[j] = []

@@ -4,9 +4,7 @@ import os
 import pickle
 
 from rvt.utils.get_dataset import get_act_dataset
-from rvt.utils.peract_utils import (
-    CAMERAS,
-)
+
 
 # TODO: REFACTOR! NORMALIZE DATA HERE BEFORE RETURNING THE SAMPLE
 class ACTDataset:
@@ -54,33 +52,6 @@ class ACTDataset:
             if isinstance(v, (torch.Tensor, np.ndarray))
         }
         return batch
-        #return self._retrieve_data(sample)
-
-    # TODO: REMOVE
-    def _retrieve_data(self, sample):
-        joint_positions = torch.from_numpy(sample["joint_positions"].squeeze(1))
-        actions = torch.from_numpy(sample["actions"].squeeze(1))
-        is_pad = torch.from_numpy(sample["is_pad"].squeeze(1))
-        # new axis for different cameras
-        all_cam_images = []
-        for cam_name in CAMERAS:
-            # rgba = torch.from_numpy(sample["%s_rgba" % cam_name].squeeze(1)) TODO: Enable after fix.
-            # all_cam_images.append(rgba)
-            rgb = torch.from_numpy(sample["%s_rgb" % cam_name].squeeze(1))
-            all_cam_images.append(rgb)
-        # construct observations
-        image_data = torch.stack(all_cam_images, axis=1)
-
-        # normalize only RGB channels
-        mean = self.norm_stats["joint_abs_position_mean"]
-        std = self.norm_stats["joint_abs_position_std"]
-        # image_data[:, :, :3, :, :] = image_data[:, :, :3, :, :] / 255.0 TODO: Enable after fix.
-        image_data = image_data / 255.0
-        joint_positions = (joint_positions - mean) / std
-        actions = (actions - mean) / std
-
-        # self.save_image(image_data.numpy())
-        return image_data, joint_positions, actions, is_pad
 
     def _reset_iterator(self):
         self._iterator = iter(self._replay_dataset)
@@ -96,7 +67,7 @@ class ACTDataset:
         print("Training iterations", training_iterations)
         for _ in range(training_iterations):
             raw_batch = next(self._iterator)
-            all_qpos.append(torch.tensor(raw_batch["qpos"].squeeze(1)))
+            all_qpos.append(torch.tensor(raw_batch["joint_positions"][0][0]))
 
         # normalize qpos data
         all_qpos = torch.stack(all_qpos)
