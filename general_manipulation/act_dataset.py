@@ -6,11 +6,9 @@ import pickle
 from rvt.utils.get_dataset import get_act_dataset
 
 
-# TODO: REFACTOR! NORMALIZE DATA HERE BEFORE RETURNING THE SAMPLE
 class ACTDataset:
     def __init__(
         self,
-        rvt_agent,
         tasks,
         batch_size,
         replay_storage_dir,
@@ -19,13 +17,10 @@ class ACTDataset:
         num_images,
         num_workers,
         training,
-        training_iterations,
-        ckpt_dir,
         device,
     ):
         super(ACTDataset).__init__()
         self.dataloader = get_act_dataset(
-            rvt_agent,
             tasks,
             batch_size,
             replay_storage_dir,
@@ -35,13 +30,12 @@ class ACTDataset:
             False,
             num_workers,
             training=training,
-            device=device,
         )
         self._iterator = iter(self.dataloader.dataset)
-        self.norm_stats = self.get_norm_stats(
-            training_iterations=training_iterations,
-            ckpt_dir=ckpt_dir,
-        )
+        # self.norm_stats = self.get_norm_stats( -> TODO: Enable when normalization.
+        #    training_iterations=training_iterations,
+        #    ckpt_dir=ckpt_dir,
+        # )
         self.device = device
 
     def get_data(self):

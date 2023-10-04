@@ -16,6 +16,7 @@ class ACTActionMode(ActionMode):
             9,
         )
         self.threshold = 0.05
+        self.stuck_threshold = 0.07
         self.device = act_executor.act_agent.device
 
     def action(self, scene: Scene, action: np.ndarray, additional_info: dict):
@@ -24,26 +25,34 @@ class ACTActionMode(ActionMode):
         prev_qpos = np.zeros(
             7,
         )
+
         heatmap = additional_info["heatmap"]
         print("UPDATING HEATMAP!")
         while not target_reached:
             obs = scene.get_observation()
             obs_dict = self.get_obs_dict(obs)
-            pred_action = (
-                self.act_executor.step(obs_dict, heatmap)
-                .cpu()
-                .numpy()
-            )
+            pred_action = self.act_executor.step(obs_dict, heatmap).cpu().numpy()
             self.arm_action_mode.action(scene, pred_action)
+            while (
+                self.euclidean_distance(
+                    scene.robot.arm.get_joint_positions(), pred_action
+                )
+                > 0.001
+            ):
+                scene.step()
+            obs = scene.get_observation()  # Get obs again after step?
+            # DEBUG
+            # print("DISTANCE IS:", self.euclidean_distance(obs.gripper_pose[:3], action[:3]))
             if (
                 self.euclidean_distance(obs.gripper_pose[:3], action[:3])
                 < self.threshold
             ):
                 target_reached = True
+                print("TARGET REACHED!")
             qpos = obs.joint_positions
-            if (self.euclidean_distance(qpos, prev_qpos)) < 0.05:
+            if (self.euclidean_distance(qpos, prev_qpos)) < 0.02:
                 stuck_iterations += 1
-                if stuck_iterations > 20:
+                if stuck_iterations > 30:
                     print("IS STUCK!!")
                     target_reached = True  # Leave the loop, retrieve new action point or fail after timeout.
             else:

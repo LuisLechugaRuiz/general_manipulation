@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 
-from rvt.utils.peract_utils import CAMERAS
-
 
 class ACTExecutor:
     def __init__(
