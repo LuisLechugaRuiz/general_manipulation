@@ -26,7 +26,7 @@ def main():
     EPOCHS = 2
     tasks = ["push_buttons"]  # Just testing from now.
     VAL_ITERATIONS = 100
-    TRAINING_ITERATIONS = 20000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
+    TRAINING_ITERATIONS = 60000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
