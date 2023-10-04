@@ -10,6 +10,7 @@ from rvt.utils.lr_sched_utils import GradualWarmupScheduler
 from peract_colab.arm.optim.lamb import Lamb
 
 from general_manipulation.models.act_model import ACTModel
+from general_manipulation.utils.video_recorder import VideoRecorder
 
 
 class ACTAgent:
@@ -42,9 +43,11 @@ class ACTAgent:
         self._warmup_steps = cfg_dict["warmup_steps"]
         self._lr_cos_dec = cfg_dict["lr_cos_dec"]
         self._lr = cfg_dict["lr"]
+        self.debug = cfg_dict["debug"]
         self._training = False
+        self._video_recorder = VideoRecorder(num_img=cfg_dict["num_images"])
 
-    def update(self, observation, heatmap, eval: bool = False):
+    def update(self, observation, target_3d_point, eval: bool = False):
         with torch.no_grad():
             obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
 
@@ -57,22 +60,29 @@ class ACTAgent:
                 pc, img_feat, self.scene_bounds, no_op=not self.move_pc_in_bound
             )
 
-            # TODO: Vectorize
             pc_new = []
-            rev_trans = []
-            for _pc in pc:
-                a, b = mvt_utils.place_pc_in_cube(
+            wpt_local = []
+            for _pc, _wpt in zip(pc, target_3d_point):
+                pc_a, _ = mvt_utils.place_pc_in_cube(
                     _pc,
                     with_mean_or_bounds=self._place_with_mean,
                     scene_bounds=None if self._place_with_mean else self.scene_bounds,
                 )
-                pc_new.append(a)
-                rev_trans.append(b)
+                pc_new.append(pc_a)
+                pc_b, _ = mvt_utils.place_pc_in_cube(
+                    _pc,
+                    _wpt,
+                    with_mean_or_bounds=self._place_with_mean,
+                    scene_bounds=None if self._place_with_mean else self.scene_bounds,
+                )
+                wpt_local.append(pc_b.unsqueeze(0))
             pc = pc_new
+            wpt_local = torch.cat(wpt_local, axis=0)
 
             img = self.render(
                 pc=pc,
                 img_feat=img_feat,
+                wpt=wpt_local,
                 img_aug=0,
                 dyn_cam_info=None,
             )
@@ -89,7 +99,6 @@ class ACTAgent:
         with torch.set_grad_enabled(use_grad):
             act_out = self.act_model(
                 img=img,
-                heatmap=heatmap,
                 proprio=proprio_joint_abs,
                 actions=actions,
                 is_pad=is_pad,
@@ -97,14 +106,14 @@ class ACTAgent:
         if use_grad:
             # backward
             loss = act_out["loss"]
+            self._optimizer.zero_grad()
             loss.backward()
             self._optimizer.step()
-            self._optimizer.zero_grad()
+            self._lr_sched.step()
 
         return act_out
 
-    # TODO: Copied from MVT - Move to common utils when refactor.
-    def render(self, pc, img_feat, img_aug, dyn_cam_info):
+    def render(self, pc, img_feat, wpt, img_aug, dyn_cam_info):
         with torch.no_grad():
             if dyn_cam_info is None:
                 dyn_cam_info_itr = (None,) * len(pc)
@@ -142,6 +151,29 @@ class ACTAgent:
 
             img = torch.cat(img, 0)
             img = img.permute(0, 1, 4, 2, 3)
+            b, n, _, h, w = img.shape  # (bs, num_img, img_feat_dim, h, w)
+
+            pts = self.renderer.get_pt_loc_on_img(
+                pt=wpt, fix_cam=True, dyn_cam_info=None
+            )  # (bs, 1, num_img, 2)
+            heatmap = torch.zeros(b, n, 1, h, w).to(
+                self.device
+            )  # (bs, num_img, 1, h, w)
+            for sb in range(b):
+                for sn in range(n):
+                    x, y = pts[sb, 0, sn, :].int()
+
+                    # Clamp x and y between [0, 219]
+                    x = max(min(x, 219), 0)
+                    y = max(min(y, 219), 0)
+
+                    heatmap[sb, sn, 0, y, x] = 255
+
+            img = torch.cat((img, heatmap), dim=2)
+            if self.debug:
+                self._video_recorder.record(
+                    img=img
+                )  # Record video - Image + heatmap while debugging.
 
             # image augmentation
             if img_aug != 0:
@@ -158,7 +190,7 @@ class ACTAgent:
 
         if training:
             # Don't use debug during training
-            self.act_model.debug = False
+            self.debug = False
 
         if self._optimizer_type == "lamb":
             # From: https://github.com/cybertronai/pytorch-lamb/blob/master/pytorch_lamb/lamb.py

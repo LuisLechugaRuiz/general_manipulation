@@ -11,7 +11,7 @@ from act.tmp.utils import compute_dict_mean, detach_dict
 from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER
 
 from general_manipulation.act_dataset import ACTDataset
-from general_manipulation.utils import get_act_agent, load_rvt_agent
+from general_manipulation.utils.load_agents import get_act_agent
 
 
 def main():
@@ -19,15 +19,14 @@ def main():
 
     # From config: -> TODO: GET FROM CONFIG!!
     BATCH_SIZE_TRAIN = 2
-    NUM_TRAIN = 100
+    NUM_TRAIN = 150  # 100 from RVT dataset, 50 from random push button dataset.
     NUM_VAL = 25
     NUM_WORKERS = 3
     NUM_IMAGES = 5
-    EPOCHS = 3
+    EPOCHS = 2
     tasks = ["push_buttons"]  # Just testing from now.
     VAL_ITERATIONS = 100
-    # TRAINING_ITERATIONS = 20000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16))
-    TRAINING_ITERATIONS = int(10000 // (BATCH_SIZE_TRAIN / 16))
+    TRAINING_ITERATIONS = 20000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
@@ -38,10 +37,7 @@ def main():
     else:
         raise RuntimeError("rvt is not installed!!")
 
-    rvt_agent = load_rvt_agent(device=device)
-    rvt_agent.load_clip()
     train_dataset = ACTDataset(
-        rvt_agent,
         tasks,
         BATCH_SIZE_TRAIN,
         TRAIN_REPLAY_STORAGE_DIR,
@@ -50,13 +46,10 @@ def main():
         NUM_IMAGES,
         NUM_WORKERS,
         True,
-        TRAINING_ITERATIONS,
-        CKPT_DIR,
         device,
     )
 
     test_dataset = ACTDataset(
-        rvt_agent,
         tasks,
         BATCH_SIZE_TRAIN,
         TEST_REPLAY_STORAGE_DIR,
@@ -65,8 +58,6 @@ def main():
         NUM_IMAGES,
         NUM_WORKERS,
         False,
-        TRAINING_ITERATIONS,
-        CKPT_DIR,
         device,
     )
 
@@ -125,9 +116,9 @@ def train_bc(
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            heatmap = get_heatmap(data)
+            target_point = data["keypoint"]
             forward_dict = act_agent.update(
-                observation=data, heatmap=heatmap, eval=False
+                observation=data, target_3d_point=target_point, eval=False
             )
             loss = forward_dict["loss"]
             train_history.append(detach_dict(forward_dict))
@@ -148,9 +139,9 @@ def train_bc(
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
-                heatmap = get_heatmap(data)
+                target_point = data["keypoint"]
                 forward_dict = act_agent.update(
-                    observation=data, heatmap=heatmap, eval=True
+                    observation=data, target_3d_point=target_point, eval=True
                 )
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
@@ -170,10 +161,9 @@ def train_bc(
             summary_string += f"{k}: {v.item():.3f} "
         # print(summary_string)
 
-        if epoch % 100 == 0:
-            ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{epoch}_seed_{seed}.ckpt")
-            torch.save(act_agent.act_model.state_dict(), ckpt_path)
-            plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
+        ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{epoch}_seed_{seed}.ckpt")
+        torch.save(act_agent.act_model.state_dict(), ckpt_path)
+        plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
     ckpt_path = os.path.join(ckpt_dir, "policy_last.ckpt")
     torch.save(act_agent.act_model.state_dict(), ckpt_path)
@@ -229,17 +219,6 @@ def get_package_path(package_name):
             with open(egg_link, "r") as f:
                 return f.readline().strip()
     return None
-
-
-def get_heatmap(observation):
-    heatmap = observation["heatmap"].squeeze(1)
-    heatmap = heatmap.view(
-        heatmap.shape[0] * heatmap.shape[1],
-        heatmap.shape[2],
-        heatmap.shape[3],
-        heatmap.shape[4],
-    )
-    return heatmap
 
 
 if __name__ == "__main__":
