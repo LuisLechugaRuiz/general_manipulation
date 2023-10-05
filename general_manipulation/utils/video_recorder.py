@@ -42,9 +42,8 @@ class VideoRecorder(object):
     def create_overlay(self, img, keypoint):
         h, w, _ = img.shape
 
-        y_indices, x_indices = np.where(keypoint == 255)
-        pt = torch.zeros(1, 2)
-        pt[0, :] = torch.tensor([x_indices[0], y_indices[0]])
+        y_indices, x_indices = np.where(np.logical_or(keypoint == 1, keypoint == 0.5))
+        pt = torch.stack([torch.tensor(x_indices), torch.tensor(y_indices)], dim=1)
         heatmap = (
             generate_hm_from_pt(
                 pt,
@@ -55,7 +54,8 @@ class VideoRecorder(object):
             .cpu()
             .numpy()
         )
-        heatmap = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX).squeeze(0)
+        heatmap = np.sum(heatmap, axis=0)
+        heatmap = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)
         heatmap_colored = cv2.applyColorMap(
             heatmap.astype(np.uint8), cv2.COLORMAP_JET
         ).astype(np.uint8)

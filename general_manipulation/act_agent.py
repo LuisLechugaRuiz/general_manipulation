@@ -12,6 +12,9 @@ from peract_colab.arm.optim.lamb import Lamb
 from general_manipulation.models.act_model import ACTModel
 from general_manipulation.utils.video_recorder import VideoRecorder
 
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
 
 class ACTAgent:
     def __init__(
@@ -47,7 +50,7 @@ class ACTAgent:
         self._training = False
         self._video_recorder = VideoRecorder(num_img=cfg_dict["num_images"])
 
-    def update(self, observation, target_3d_point, eval: bool = False):
+    def update(self, observation, target_pose, eval: bool = False):
         with torch.no_grad():
             obs, pcd = peract_utils._preprocess_inputs(observation, self.cameras)
 
@@ -62,27 +65,45 @@ class ACTAgent:
 
             pc_new = []
             wpt_local = []
-            for _pc, _wpt in zip(pc, target_3d_point):
+            proj_wpt = []
+            for _pc, _wpt in zip(pc, target_pose):
                 pc_a, _ = mvt_utils.place_pc_in_cube(
                     _pc,
                     with_mean_or_bounds=self._place_with_mean,
                     scene_bounds=None if self._place_with_mean else self.scene_bounds,
                 )
                 pc_new.append(pc_a)
+                position = _wpt[0, :3]
+                quaternion = _wpt[0, 3:7]
                 pc_b, _ = mvt_utils.place_pc_in_cube(
                     _pc,
-                    _wpt,
+                    position,
                     with_mean_or_bounds=self._place_with_mean,
                     scene_bounds=None if self._place_with_mean else self.scene_bounds,
                 )
                 wpt_local.append(pc_b.unsqueeze(0))
+
+                # Get direction
+                direction = self.get_direction(quaternion.cpu().numpy())
+                displaced_point = (
+                    position + direction * 0.03
+                )  # Add a small displacement
+                pc_c, _ = mvt_utils.place_pc_in_cube(
+                    _pc,
+                    displaced_point,
+                    with_mean_or_bounds=self._place_with_mean,
+                    scene_bounds=None if self._place_with_mean else self.scene_bounds,
+                )
+                proj_wpt.append(pc_c.unsqueeze(0))
             pc = pc_new
             wpt_local = torch.cat(wpt_local, axis=0)
+            proj_wpt = torch.cat(proj_wpt, axis=0)
 
             img = self.render(
                 pc=pc,
                 img_feat=img_feat,
                 wpt=wpt_local,
+                proj_wpt=proj_wpt,
                 img_aug=0,
                 dyn_cam_info=None,
             )
@@ -113,7 +134,7 @@ class ACTAgent:
 
         return act_out
 
-    def render(self, pc, img_feat, wpt, img_aug, dyn_cam_info):
+    def render(self, pc, img_feat, wpt, proj_wpt, img_aug, dyn_cam_info):
         with torch.no_grad():
             if dyn_cam_info is None:
                 dyn_cam_info_itr = (None,) * len(pc)
@@ -153,21 +174,38 @@ class ACTAgent:
             img = img.permute(0, 1, 4, 2, 3)
             b, n, _, h, w = img.shape  # (bs, num_img, img_feat_dim, h, w)
 
+            wpt = wpt.unsqueeze(1)
             pts = self.renderer.get_pt_loc_on_img(
                 pt=wpt, fix_cam=True, dyn_cam_info=None
+            )  # (bs, 1, num_img, 2)
+            proj_wpt = proj_wpt.unsqueeze(1)
+            proj_pts = self.renderer.get_pt_loc_on_img(
+                pt=proj_wpt, fix_cam=True, dyn_cam_info=None
             )  # (bs, 1, num_img, 2)
             heatmap = torch.zeros(b, n, 1, h, w).to(
                 self.device
             )  # (bs, num_img, 1, h, w)
+
+            def clamp(x, y, min_value=0, max_value=219):
+                x = max(min(x, max_value), min_value)
+                y = max(min(y, max_value), min_value)
+
+                return x, y
+
             for sb in range(b):
                 for sn in range(n):
-                    x, y = pts[sb, 0, sn, :].int()
+                    pt = pts[sb, 0, sn, :].int()
+                    x, y = pt
+                    x, y = clamp(x, y)
+                    heatmap[sb, sn, 0, y, x] = 1
 
-                    # Clamp x and y between [0, 219]
-                    x = max(min(x, 219), 0)
-                    y = max(min(y, 219), 0)
-
-                    heatmap[sb, sn, 0, y, x] = 255
+                    proj_pt = proj_pts[sb, 0, sn, :].int()
+                    dir_2d = proj_pt - pt
+                    x1, y1 = x + dir_2d[0], y + dir_2d[1]
+                    dir_pts = self.bresenham_line(int(x), int(y), int(x1), int(y1))
+                    for dir_pt in dir_pts:
+                        x, y = clamp(dir_pt[0], dir_pt[1])
+                        heatmap[sb, sn, 0, y, x] = 0.5
 
             img = torch.cat((img, heatmap), dim=2)
             if self.debug:
@@ -224,3 +262,37 @@ class ACTAgent:
             total_epoch=self._warmup_steps,
             after_scheduler=after_scheduler,
         )
+
+    def get_direction(self, quaternion):
+        reference_vector = np.array([0, 0, 1])  # From RVEP ref
+
+        # Convert the quaternion to a rotation matrix
+        rotation_matrix = R.from_quat(quaternion).as_matrix()
+
+        # Get the actual direction the gripper is pointing in
+        gripper_direction = np.dot(rotation_matrix, reference_vector)
+
+        return torch.tensor(gripper_direction).to(self.device).float()
+
+    def bresenham_line(self, x0, y0, x1, y1):
+        """Generate points along a line using Bresenham's algorithm."""
+        points = []
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        while True:
+            points.append((x0, y0))
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
+
+        return points

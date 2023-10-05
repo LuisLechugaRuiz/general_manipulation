@@ -43,7 +43,6 @@ def main():
         TRAIN_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_TRAIN,
-        NUM_IMAGES,
         NUM_WORKERS,
         True,
         device,
@@ -55,7 +54,6 @@ def main():
         TEST_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_VAL,
-        NUM_IMAGES,
         NUM_WORKERS,
         False,
         device,
@@ -116,9 +114,9 @@ def train_bc(
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            target_point = data["keypoint"]
+            target_pose = data["target_pose"]
             forward_dict = act_agent.update(
-                observation=data, target_3d_point=target_point, eval=False
+                observation=data, target_pose=target_pose, eval=False
             )
             loss = forward_dict["loss"]
             train_history.append(detach_dict(forward_dict))
@@ -139,9 +137,9 @@ def train_bc(
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
-                target_point = data["keypoint"]
+                target_pose = data["target_pose"]
                 forward_dict = act_agent.update(
-                    observation=data, target_3d_point=target_point, eval=True
+                    observation=data, target_pose=target_pose, eval=True
                 )
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
