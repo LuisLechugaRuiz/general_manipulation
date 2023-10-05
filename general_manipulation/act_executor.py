@@ -50,9 +50,9 @@ class ACTExecutor:
         raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
         return raw_action
 
-    def step(self, observation, target_point):
-        target_point = torch.tensor(target_point).cuda().float().unsqueeze(0).unsqueeze(0)
-        a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation, target_point)
+    def step(self, observation, target_pose):
+        target_pose = torch.tensor(target_pose).cuda().float().unsqueeze(0).unsqueeze(0)
+        a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation, target_pose)
         raw_action = self._temporal_ensembling(a_hat)
         raw_action = raw_action.squeeze(0).cuda()
         return raw_action

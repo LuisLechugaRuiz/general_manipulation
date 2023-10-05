@@ -30,15 +30,15 @@ class ACTActionMode(ActionMode):
         while not target_reached:
             obs = scene.get_observation()
             obs_dict = self.get_obs_dict(obs)
-            pred_action = self.act_executor.step(obs_dict, action[:3]).cpu().numpy()
+            pred_action = self.act_executor.step(obs_dict, action[:7]).cpu().numpy()
             self.arm_action_mode.action(scene, pred_action)
-            while (
-                self.euclidean_distance(
-                    scene.robot.arm.get_joint_positions(), pred_action
-                )
-                > 0.001
-            ):
-                scene.step()
+            # while (
+            #    self.euclidean_distance(
+            #        scene.robot.arm.get_joint_positions(), pred_action
+            #    )
+            #    > 0.001
+            #):
+            #    scene.step()
             obs = scene.get_observation()  # Get obs again after step?
             # DEBUG
             # print("DISTANCE IS:", self.euclidean_distance(obs.gripper_pose[:3], action[:3]))

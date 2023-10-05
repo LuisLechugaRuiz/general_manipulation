@@ -18,15 +18,14 @@ def main():
     device = "cuda:0"
 
     # From config: -> TODO: GET FROM CONFIG!!
-    BATCH_SIZE_TRAIN = 2
-    NUM_TRAIN = 150  # 100 from RVT dataset, 50 from random push button dataset.
+    BATCH_SIZE_TRAIN = 4
+    NUM_TRAIN = 100
     NUM_VAL = 25
     NUM_WORKERS = 3
-    NUM_IMAGES = 5
     EPOCHS = 2
-    tasks = ["push_buttons"]  # Just testing from now.
+    tasks = ["push_buttons", "close_jar"]  # Just testing from now.
     VAL_ITERATIONS = 100
-    TRAINING_ITERATIONS = 60000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
+    TRAINING_ITERATIONS = 70000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
@@ -61,9 +60,6 @@ def main():
 
     config = {
         "num_epochs": EPOCHS,
-        "task_name": tasks[0],
-        "temporal_agg": True,
-        "camera_names": CAMERAS,
         "ckpt_dir": CKPT_DIR,
         "seed": 0,
     }
