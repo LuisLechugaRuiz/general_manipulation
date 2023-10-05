@@ -18,15 +18,14 @@ def main():
     device = "cuda:0"
 
     # From config: -> TODO: GET FROM CONFIG!!
-    BATCH_SIZE_TRAIN = 2
-    NUM_TRAIN = 150  # 100 from RVT dataset, 50 from random push button dataset.
+    BATCH_SIZE_TRAIN = 4
+    NUM_TRAIN = 100
     NUM_VAL = 25
     NUM_WORKERS = 3
-    NUM_IMAGES = 5
     EPOCHS = 2
-    tasks = ["push_buttons"]  # Just testing from now.
+    tasks = ["push_buttons", "close_jar"]  # Just testing from now.
     VAL_ITERATIONS = 100
-    TRAINING_ITERATIONS = 60000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
+    TRAINING_ITERATIONS = 70000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
@@ -43,7 +42,6 @@ def main():
         TRAIN_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_TRAIN,
-        NUM_IMAGES,
         NUM_WORKERS,
         True,
         device,
@@ -55,7 +53,6 @@ def main():
         TEST_REPLAY_STORAGE_DIR,
         RVT_DATA_FOLDER,
         NUM_VAL,
-        NUM_IMAGES,
         NUM_WORKERS,
         False,
         device,
@@ -63,9 +60,6 @@ def main():
 
     config = {
         "num_epochs": EPOCHS,
-        "task_name": tasks[0],
-        "temporal_agg": True,
-        "camera_names": CAMERAS,
         "ckpt_dir": CKPT_DIR,
         "seed": 0,
     }
@@ -116,9 +110,9 @@ def train_bc(
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            target_point = data["keypoint"]
+            target_pose = data["target_pose"]
             forward_dict = act_agent.update(
-                observation=data, target_3d_point=target_point, eval=False
+                observation=data, target_pose=target_pose, eval=False
             )
             loss = forward_dict["loss"]
             train_history.append(detach_dict(forward_dict))
@@ -139,9 +133,9 @@ def train_bc(
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
-                target_point = data["keypoint"]
+                target_pose = data["target_pose"]
                 forward_dict = act_agent.update(
-                    observation=data, target_3d_point=target_point, eval=True
+                    observation=data, target_pose=target_pose, eval=True
                 )
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
