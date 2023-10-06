@@ -133,7 +133,6 @@ class ACTCVAE(nn.Module):
         eps = Variable(std.data.new(std.size()).normal_())
         return mu + std * eps
 
-    # TODO: Get args properly.
     @classmethod
     def build_encoder(
         self,
