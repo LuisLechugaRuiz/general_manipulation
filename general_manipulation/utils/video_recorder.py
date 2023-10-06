@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
-import torch
-
-from rvt.mvt.utils import generate_hm_from_pt
+from torch.nn import functional as F
 
 
 class VideoRecorder(object):
@@ -15,7 +13,7 @@ class VideoRecorder(object):
         self.output_filename = output_filename
         self.num_img = num_img
 
-    def record(self, img=None):
+    def record(self, img=None, attn=None, num_pat_img=None, num_heads=None, heatmap=None):
         bs = img.shape[0]
         for i in range(bs):
             for j in range(self.num_img):
@@ -24,8 +22,34 @@ class VideoRecorder(object):
                 single_img = ((single_img + 1.0) * 255.0 / 2.0).astype(np.uint8)
                 single_img = np.transpose(single_img, (1, 2, 0))
 
-                single_keypoint = img[i, j, 7].cpu().numpy()
-                overlay = self.create_overlay(single_img, single_keypoint)
+                single_hm = heatmap[i, j].cpu().numpy()
+
+                single_attn = attn[
+                    -1
+                ]  # Last attention layer - [bs * num_img * num_heads, num_pat_img * num_pat_img, num_pat_img * num_pat_img]
+                batch_size = i * num_heads * self.num_img
+                start_index = batch_size + j * num_heads
+                single_attn_mean = single_attn[
+                    start_index : start_index + num_heads
+                ].mean(
+                    dim=0
+                )  # [num_pat_img * num_pat_img, num_pat_img * num_pat_img]
+                sum_attn = single_attn_mean.sum(dim=0)  # [num_pat_img * num_pat_img]
+                # Reshape the attention weights to a 2D spatial structure
+                single_attn_map = sum_attn.reshape(
+                    num_pat_img, num_pat_img
+                )  # [num_pat_img, num_pat_img]
+                single_attn_map = single_attn_map.unsqueeze(0).unsqueeze(0)
+                h, w, _ = single_img.shape
+                upscaled_attention_map = (
+                    F.interpolate(single_attn_map, size=(h, w), mode="bilinear")
+                    .squeeze()
+                    .cpu()
+                    .numpy()
+                )
+                overlay = self.create_overlay(
+                    single_img, single_hm, upscaled_attention_map
+                )
 
                 if j not in self.frames:
                     self.frames[j] = []
@@ -39,28 +63,20 @@ class VideoRecorder(object):
             self.frames = {}  # Clear the frames
             self.img_frames = {}
 
-    def create_overlay(self, img, keypoint):
-        h, w, _ = img.shape
-
-        y_indices, x_indices = np.where(np.logical_or(keypoint == 1, keypoint == 0.5))
-        pt = torch.stack([torch.tensor(x_indices), torch.tensor(y_indices)], dim=1)
-        heatmap = (
-            generate_hm_from_pt(
-                pt,
-                (h, w),
-                sigma=1.5,
-                thres_sigma_times=3,
-            )
-            .cpu()
-            .numpy()
-        )
-        heatmap = np.sum(heatmap, axis=0)
+    def create_overlay(self, img, heatmap, attn):
         heatmap = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)
         heatmap_colored = cv2.applyColorMap(
             heatmap.astype(np.uint8), cv2.COLORMAP_JET
         ).astype(np.uint8)
-        overlay = cv2.addWeighted(img, 0.4, heatmap_colored, 1.0, 0)
-        return overlay
+
+        attn = cv2.normalize(attn, None, 0, 255, cv2.NORM_MINMAX)
+        attention_colored = cv2.applyColorMap(
+            attn.astype(np.uint8), cv2.COLORMAP_HOT
+        ).astype(np.uint8)
+
+        overlay1 = cv2.addWeighted(img, 0.6, heatmap_colored, 0.4, 0)
+        overlay_final = cv2.addWeighted(overlay1, 0.6, attention_colored, 0.4, 0)
+        return overlay_final
 
     def create_videos(self):
         for camera_idx, frames in self.frames.items():
