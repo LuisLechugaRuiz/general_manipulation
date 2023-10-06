@@ -22,7 +22,7 @@ _C.decoder_dropout = 0.0
 _C.img_patch_size = 11
 _C.final_dim = 64
 _C.self_cross_ver = 1
-_C.add_corr = True
+# _C.add_corr = True
 _C.add_pixel_loc = True
 _C.add_depth = True
 _C.pe_fix = True
@@ -36,7 +36,9 @@ _C.num_decoder_layers = 7
 _C.normalize_before = False
 _C.kl_weight = 10
 _C.num_images = 5
+_C.add_corr = False  # Set to False to simplify input channels and help the model focus on heatmap.
 _C.debug = True
+
 
 # Copied from peral - rvt
 _C.lambda_weight_l2 = 1e-6

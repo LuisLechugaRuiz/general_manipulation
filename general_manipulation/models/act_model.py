@@ -74,7 +74,11 @@ class ACTModel(nn.Module):
         )
 
         inp_img_feat_dim = self.img_feat_dim
-        inp_img_feat_dim += 5  # 3 corr + 1 depth + 1 heatmap
+        if self.add_corr:
+            inp_img_feat_dim += 3
+        if self.add_depth:
+            inp_img_feat_dim += 1
+        inp_img_feat_dim += 1  # 1 heatmap -> TODO: Add config flag
 
         # img input preprocessing encoder
         self.input_preprocess = Conv2DBlock(
@@ -162,6 +166,15 @@ class ACTModel(nn.Module):
         self.action_head = nn.Linear(self.attn_dim, self.state_dim)
         self.is_pad_head = nn.Linear(self.attn_dim, 1)
 
+        # Heatmap reconstruction
+        self.hm_reconstruction_decoder = DenseBlock(
+            self.attn_dim,
+            self.num_img * self.img_size * self.img_size,
+            norm=None,
+            activation=self.activation,
+        )
+        self.hm_unflatten = nn.Unflatten(1, (self.num_img, 1, self.img_size, self.img_size))
+
     def forward(
         self,
         img,
@@ -180,6 +193,9 @@ class ACTModel(nn.Module):
         assert num_img == self.num_img
         # assert img_feat_dim == self.img_feat_dim
         assert h == w == self.img_size
+
+        # save original hm
+        original_heatmap = img[:, :, img_feat_dim - 1, :, :]
 
         # cvae
         if actions is not None:
@@ -237,11 +253,13 @@ class ACTModel(nn.Module):
 
         x = self.fc_bef_attn(ins)
 
+        # attention_weights = []
         # within image self attention
         x = x.reshape(bs * num_img, num_pat_img * num_pat_img, -1)
         for self_attn, self_ff in self.layers[: len(self.layers) // 2]:
             x = self_attn(x) + x
             x = self_ff(x) + x
+            # attention_weights.append(self_attn.stored_attn_weights)
 
         x = x.view(bs, num_img * num_pat_img * num_pat_img, -1)
         # attention across images
@@ -251,6 +269,20 @@ class ACTModel(nn.Module):
 
         pos = self.pos_embed_decoder.transpose(0, 1).repeat(1, bs, 1)
         memory = x.transpose(0, 1)
+
+        # TODO: Heatmap reconstruction
+        reconstructed = self.hm_reconstruction_decoder(memory)
+        reconstructed_heatmap = self.hm_unflatten(reconstructed)
+        heatmap_loss = F.mse_loss(reconstructed_heatmap, original_heatmap)
+        # TODO: Add heatmap_loss with a value to our loss function.
+
+        # TODO: Attention visualization - For each patch.
+        # For simplicity, visualize the first batch and the first layer
+        # sample_attention = attention_weights[0][0]  # First batch, first layer
+        # Reshape the attention weights to a 2D spatial structure
+        # attention_map = sample_attention.reshape(num_pat_img, num_pat_img)  # 20 x 20
+        # img shape [bs, num_img, img_feat_dim, h, w]
+        # upscaled_attention_map = F.interpolate(attention_map.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear').squeeze()
 
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
         tgt = torch.zeros_like(query_embed)
