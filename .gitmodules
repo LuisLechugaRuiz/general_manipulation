@@ -1,3 +1,6 @@
 [submodule "RVT"]
 	path = RVT
 	url = git@github.com:LuisLechugaRuiz/RVT.git
+[submodule "act"]
+	path = act
+	url = git@github.com:LuisLechugaRuiz/act.git
