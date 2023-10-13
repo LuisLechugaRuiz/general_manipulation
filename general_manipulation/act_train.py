@@ -5,69 +5,76 @@ import torch
 import os
 import site
 from tqdm import tqdm
+import argparse
 
 from act.tmp.utils import compute_dict_mean, detach_dict
 
-from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER
+from rvt.utils.peract_utils import DATA_FOLDER
 
-from general_manipulation.act_dataset import ACTDataset
+from general_manipulation.helpers.act_dataset import ACTDataset
 from general_manipulation.utils.load_agents import get_act_agent
+import general_manipulation.config.act_train_config as act_train_cfg
 
 
-def main():
-    device = "cuda:0"
-
-    # From config: -> TODO: GET FROM CONFIG!!
-    BATCH_SIZE_TRAIN = 4
-    NUM_TRAIN = 100
-    NUM_VAL = 25
-    NUM_WORKERS = 3
-    EPOCHS = 2
-    tasks = ["push_buttons", "close_jar"]  # Just testing from now.
-    VAL_ITERATIONS = 100
-    TRAINING_ITERATIONS = 70000  # Previously: int(10000 // (BATCH_SIZE_TRAIN / 16)) -> 80000
+def main(args):
+    stage = args.stage
+    train_cfg = act_train_cfg.get_cfg_defaults()
+    device = train_cfg.device
+    tasks = train_cfg.tasks,
+    batch_size_train = train_cfg.batch_size_train,
+    num_workers = train_cfg.num_workers,
+    epochs = train_cfg.epochs
 
     rvt_package_path = get_package_path("rvt")
     if rvt_package_path:
-        RVT_DATA_FOLDER = f"{rvt_package_path}/rvt/{DATA_FOLDER}"
-        CKPT_DIR = f"{RVT_DATA_FOLDER}/act_checkpoint"
-        TRAIN_REPLAY_STORAGE_DIR = f"{rvt_package_path}/rvt/replay/replay_train"
-        TEST_REPLAY_STORAGE_DIR = f"{rvt_package_path}/rvt/replay/replay_val"
+        rvt_data_folder = f"{rvt_package_path}/rvt/{DATA_FOLDER}"
+        ckpt_dir = f"{rvt_data_folder}/act_checkpoint/stage{stage}"
+        train_replay_storage_dir = f"{rvt_package_path}/rvt/replay/replay_train"
+        test_replay_storage_dir = f"{rvt_package_path}/rvt/replay/replay_val"
     else:
         raise RuntimeError("rvt is not installed!!")
 
     train_dataset = ACTDataset(
         tasks,
-        BATCH_SIZE_TRAIN,
-        TRAIN_REPLAY_STORAGE_DIR,
-        RVT_DATA_FOLDER,
-        NUM_TRAIN,
-        NUM_WORKERS,
+        batch_size_train,
+        train_replay_storage_dir,
+        rvt_data_folder,
+        train_cfg.num_train,
+        num_workers,
         True,
+        train_cfg.training_iterations,
+        ckpt_dir,
         device,
     )
 
     test_dataset = ACTDataset(
         tasks,
-        BATCH_SIZE_TRAIN,
-        TEST_REPLAY_STORAGE_DIR,
-        RVT_DATA_FOLDER,
-        NUM_VAL,
-        NUM_WORKERS,
+        batch_size_train,
+        test_replay_storage_dir,
+        rvt_data_folder,
+        train_cfg.num_val,
+        num_workers,
         False,
+        train_cfg.val_iterations,
+        ckpt_dir,
         device,
     )
 
     config = {
-        "num_epochs": EPOCHS,
+        "num_epochs": epochs,
         "ckpt_dir": CKPT_DIR,
         "seed": 0,
     }
-    cos_dec_max_step = EPOCHS * TRAINING_ITERATIONS
-    act_agent = get_act_agent(device=device, cos_dec_max_step=cos_dec_max_step)
+    cos_dec_max_step = epochs * training_iterations
+    act_agent = get_act_agent(
+        norm_stats=train_dataset.norm_stats,
+        device=device,
+        cos_dec_max_step=cos_dec_max_step,
+    )
     act_agent.build(training=True, device=device)
 
     best_ckpt_info = train_bc(
+        stage,
         act_agent,
         train_dataset,
         test_dataset,
@@ -83,7 +90,9 @@ def main():
     print(f"Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}")
 
 
+# TODO: Cleanup function, don't duplicate train and eval.
 def train_bc(
+    stage,
     act_agent,
     train_dataset,
     val_dataset,
@@ -110,7 +119,12 @@ def train_bc(
         tbar = tqdm(range(training_iterations))
         for batch_idx in tbar:
             data = train_dataset.get_data()
-            target_pose = data["target_pose"]
+            if stage == 0:
+                target_pose = data["action_last_pose"]
+            elif stage == 1:
+                target_pose = data["target_pose"]
+            else:
+                raise Exception("Unknown stage!")
             forward_dict = act_agent.update(
                 observation=data, target_pose=target_pose, eval=False
             )
@@ -133,7 +147,12 @@ def train_bc(
             epoch_dicts = []
             for _ in tqdm(range(val_iterations)):
                 data = val_dataset.get_data()
-                target_pose = data["target_pose"]
+                if stage == 0:
+                    target_pose = data["action_last_pose"]
+                elif stage == 1:
+                    target_pose = data["target_pose"]
+                else:
+                    raise Exception("Unknown stage!")
                 forward_dict = act_agent.update(
                     observation=data, target_pose=target_pose, eval=True
                 )
@@ -216,4 +235,10 @@ def get_package_path(package_name):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--stage", type=int, default=0,
+    )
+    args = parser.parse_args()
+
+    main(args)

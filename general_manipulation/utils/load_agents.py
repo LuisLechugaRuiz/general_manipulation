@@ -6,19 +6,24 @@ import rvt.config as default_exp_cfg
 import rvt.models.rvt_agent as rvt_agent
 import rvt.mvt.config as default_mvt_cfg
 from rvt.mvt.mvt import MVT
-from rvt.utils.peract_utils import CAMERAS, DATA_FOLDER, SCENE_BOUNDS, IMAGE_SIZE
+from rvt.utils.peract_utils import CAMERAS, SCENE_BOUNDS, IMAGE_SIZE
 from rvt.utils.rvt_utils import load_agent as load_agent_state
 
 from general_manipulation.act_agent import ACTAgent
-import general_manipulation.act_config as default_act_cfg
+import general_manipulation.config.act_config as default_act_cfg
 
 
-def get_act_agent(device, cos_dec_max_step: int = 60000):
+def get_act_agent(norm_stats, device, cos_dec_max_step: int = 60000):
     act_cfg = default_act_cfg.get_cfg_defaults()
     act_cfg.freeze()
     act_cfg_dict = yaml.safe_load(act_cfg.dump())
 
-    return ACTAgent(device=device, cfg_dict=act_cfg_dict, cos_dec_max_step=cos_dec_max_step)
+    return ACTAgent(
+        norm_stats=norm_stats,
+        device=device,
+        cfg_dict=act_cfg_dict,
+        cos_dec_max_step=cos_dec_max_step,
+    )
 
 
 def load_rvt_agent(

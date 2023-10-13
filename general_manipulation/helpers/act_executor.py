@@ -1,30 +1,17 @@
 import torch
 import numpy as np
 
-
+# TODO: REMOVE
 class ACTExecutor:
     def __init__(
         self, act_agent, state_dim, num_queries, max_size=100
     ):
-        # self.norm_stats = norm_stats
         self.num_queries = num_queries
         self.max_size = max_size
         self.all_time_actions = torch.zeros(
             [num_queries, num_queries, state_dim]
         ).cuda()
         self.act_agent = act_agent
-
-    # TODO: Move this to ACT Agent (add auxiliar class to normalize data)
-    def _pre_process(self, joint_positions):
-        return (
-            joint_positions - self.norm_stats["joint_abs_position_mean"].cuda()
-        ) / self.norm_stats["joint_abs_position_std"].cuda()
-
-    def _post_process(self, action):
-        return (
-            action * self.norm_stats["joint_abs_position_std"].cuda()
-            + self.norm_stats["joint_abs_position_mean"].cuda()
-        )
 
     def _temporal_ensembling(self, all_actions):
         # Shift all existing actions to the left in each sequence
@@ -52,7 +39,8 @@ class ACTExecutor:
 
     def step(self, observation, target_pose):
         target_pose = torch.tensor(target_pose).cuda().float().unsqueeze(0).unsqueeze(0)
-        a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation, target_pose)
+        # a_hat, is_pad_hat, [mu, logvar] = self.act_agent.update(observation, target_pose) TODO: Enable with CVAE.
+        a_hat, is_pad_hat = self.act_agent.update(observation, target_pose)
         raw_action = self._temporal_ensembling(a_hat)
         raw_action = raw_action.squeeze(0).cuda()
         return raw_action

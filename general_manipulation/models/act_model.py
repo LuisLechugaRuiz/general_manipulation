@@ -13,6 +13,7 @@ from rvt.mvt.attn import (
     FeedForward,
 )
 from general_manipulation.models.act_cvae import ACTCVAE
+from general_manipulation.utils.video_recorder import VideoRecorder
 
 
 class ACTModel(nn.Module):
@@ -20,6 +21,7 @@ class ACTModel(nn.Module):
         self,
         cfg_dict,
         num_img,
+        norm_stats,
     ):
         """MultiView Transfomer adapted to run ACT."""
 
@@ -45,16 +47,19 @@ class ACTModel(nn.Module):
         self.num_decoder_layers = cfg_dict["num_decoder_layers"]
         self.normalize_before = cfg_dict["normalize_before"]
         self.kl_weight = cfg_dict["kl_weight"]
+        self.debug = cfg_dict["debug"]
 
         print(f"ACTModel Vars: {vars(self)}")
 
         self.num_img = num_img
+        self.norm_stats = norm_stats
 
         # patchified input dimensions
         spatial_size = self.img_size // self.img_patch_size  # 220 / 11 = 20
 
         # 64 img features + 64 proprio features + 64 latent features
-        self.input_dim_before_seq = self.im_channels * 3
+        # self.input_dim_before_seq = self.im_channels * 3
+        self.input_dim_before_seq = self.im_channels * 2  # TODO: Enable CVAE.
 
         # learnable positional encoding
         num_pe_token = spatial_size**2 * self.num_img
@@ -78,7 +83,7 @@ class ACTModel(nn.Module):
             inp_img_feat_dim += 3
         if self.add_depth:
             inp_img_feat_dim += 1
-        inp_img_feat_dim += 1  # 1 heatmap -> TODO: Add config flag
+        inp_img_feat_dim += 2  # 2 heatmap -> TODO: Add config flag
 
         # img input preprocessing encoder
         self.input_preprocess = Conv2DBlock(
@@ -153,7 +158,7 @@ class ACTModel(nn.Module):
             dim_feedforward=self.dim_feedforward,
             num_encoder_layers=self.num_encoder_layers,
             normalize_before=self.normalize_before,
-            projected_dim=self.im_channels
+            projected_dim=self.im_channels,
         )
         self.decoder = ACTCVAE.build_decoder(
             hidden_dim=self.attn_dim,
@@ -166,14 +171,16 @@ class ACTModel(nn.Module):
         self.action_head = nn.Linear(self.attn_dim, self.state_dim)
         self.is_pad_head = nn.Linear(self.attn_dim, 1)
 
+        self._video_recorder = VideoRecorder(num_img=cfg_dict["num_images"])
+
         # Heatmap reconstruction
-        self.hm_reconstruction_decoder = DenseBlock(
-            self.attn_dim,
-            self.num_img * self.img_size * self.img_size,
-            norm=None,
-            activation=self.activation,
-        )
-        self.hm_unflatten = nn.Unflatten(1, (self.num_img, 1, self.img_size, self.img_size))
+        # self.hm_reconstruction_decoder = DenseBlock(
+        #    self.attn_dim,
+        #    self.num_img * self.img_size * self.img_size,
+        #    norm=None,
+        #    activation=self.activation,
+        # )
+        # self.hm_unflatten = nn.Unflatten(1, (self.num_img, 1, self.img_size, self.img_size))
 
     def forward(
         self,
@@ -194,15 +201,18 @@ class ACTModel(nn.Module):
         # assert img_feat_dim == self.img_feat_dim
         assert h == w == self.img_size
 
+        original_img = img
+        proprio = self.pre_process(proprio)
         # save original hm
-        original_heatmap = img[:, :, img_feat_dim - 1, :, :]
+        # original_heatmap = img[:, :, img_feat_dim - 1, :, :]
 
         # cvae
         if actions is not None:
-            latent, (mu, logvar) = self.cvae_encoder(proprio, actions, is_pad)
+            actions = self.pre_process(actions)
+            # latent, (mu, logvar) = self.cvae_encoder(proprio, actions, is_pad)
             training = True
         else:
-            latent, (mu, logvar) = self.cvae_encoder(proprio)
+            # latent, (mu, logvar) = self.cvae_encoder(proprio)
             training = False
 
         img = img.view(bs * num_img, img_feat_dim, h, w)
@@ -227,20 +237,15 @@ class ACTModel(nn.Module):
         )
         # concat proprio
         _, _, _d, _h, _w = ins.shape
-        p = self.proprio_preprocess(
-            proprio
-        )  # [B,7] -> [B,64]
+        p = self.proprio_preprocess(proprio)  # [B,7] -> [B,64]
         p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
         ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
-        # concat latent
-        latent_processed = (
-            latent.unsqueeze(-1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .repeat(1, 1, _d, _h, _w)
-        )
-        ins = torch.cat([ins, latent_processed], dim=1)  # [B, 192, num_img, np, np]
+        # concat latent -> TODO: Enable latent.
+        # latent_processed = (
+        #    latent.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
+        #)
+        # ins = torch.cat([ins, latent_processed], dim=1)  # [B, 192, num_img, np, np]
 
         # channel last
         ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 192]
@@ -253,13 +258,22 @@ class ACTModel(nn.Module):
 
         x = self.fc_bef_attn(ins)
 
-        # attention_weights = []
+        attention_weights = []
         # within image self attention
         x = x.reshape(bs * num_img, num_pat_img * num_pat_img, -1)
         for self_attn, self_ff in self.layers[: len(self.layers) // 2]:
-            x = self_attn(x) + x
+            out, attn_weight = self_attn(x, get_weights=True)
+            attention_weights.append(attn_weight.detach())
+            x = out + x
             x = self_ff(x) + x
-            # attention_weights.append(self_attn.stored_attn_weights)
+
+        if self.debug:
+            self._video_recorder.record(
+                img=original_img,
+                attn=attention_weights,
+                num_pat_img=num_pat_img,
+                num_heads=self.attn_heads,
+            )  # Record video - Image + heatmap while debugging.
 
         x = x.view(bs, num_img * num_pat_img * num_pat_img, -1)
         # attention across images
@@ -271,40 +285,37 @@ class ACTModel(nn.Module):
         memory = x.transpose(0, 1)
 
         # TODO: Heatmap reconstruction
-        reconstructed = self.hm_reconstruction_decoder(memory)
-        reconstructed_heatmap = self.hm_unflatten(reconstructed)
-        heatmap_loss = F.mse_loss(reconstructed_heatmap, original_heatmap)
+        # reconstructed = self.hm_reconstruction_decoder(memory)
+        # reconstructed_heatmap = self.hm_unflatten(reconstructed)
+        # heatmap_loss = F.mse_loss(reconstructed_heatmap, original_heatmap)
         # TODO: Add heatmap_loss with a value to our loss function.
-
-        # TODO: Attention visualization - For each patch.
-        # For simplicity, visualize the first batch and the first layer
-        # sample_attention = attention_weights[0][0]  # First batch, first layer
-        # Reshape the attention weights to a 2D spatial structure
-        # attention_map = sample_attention.reshape(num_pat_img, num_pat_img)  # 20 x 20
-        # img shape [bs, num_img, img_feat_dim, h, w]
-        # upscaled_attention_map = F.interpolate(attention_map.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear').squeeze()
 
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
         tgt = torch.zeros_like(query_embed)
-        hs = self.decoder(
-            tgt=tgt, memory=memory, pos=pos, query_pos=query_embed
-        )
+        hs = self.decoder(tgt=tgt, memory=memory, pos=pos, query_pos=query_embed)
         hs = hs.transpose(1, 2)[0]  # Get last layer output
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
 
         if training:
-            total_kld, dim_wise_kld, mean_kld = self.cvae_encoder.kl_divergence(
-                mu, logvar
-            )
+            # total_kld, dim_wise_kld, mean_kld = self.cvae_encoder.kl_divergence(
+            #    mu, logvar
+            #)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction="none")
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict["l1"] = l1
-            loss_dict["kl"] = total_kld[0]
-            loss_dict["loss"] = (
-                loss_dict["l1"] + loss_dict["kl"] * self.kl_weight
-            )
+            # loss_dict["kl"] = total_kld[0]
+            # loss_dict["loss"] = loss_dict["l1"] + loss_dict["kl"] * self.kl_weight
+            loss_dict["loss"] = l1  # TODO: Add kl loss when enabling CVAE.
             return loss_dict
         else:
-            return a_hat, is_pad_hat, [mu, logvar]
+            # return a_hat, is_pad_hat, [mu, logvar] TODO: Enable with CVAE
+            a_hat = self.post_process(a_hat)
+            return a_hat, is_pad_hat
+
+    def pre_process(self, joint_positions):
+        return (joint_positions - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+
+    def post_process(self, joint_positions):
+        return joint_positions * self.norm_stats["qpos_std"] + self.norm_stats["qpos_mean"]

@@ -10,7 +10,6 @@ from rvt.utils.lr_sched_utils import GradualWarmupScheduler
 from peract_colab.arm.optim.lamb import Lamb
 
 from general_manipulation.models.act_model import ACTModel
-from general_manipulation.utils.video_recorder import VideoRecorder
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -19,6 +18,7 @@ from scipy.spatial.transform import Rotation as R
 class ACTAgent:
     def __init__(
         self,
+        norm_stats,
         device,
         cfg_dict,
         cos_dec_max_step: int = 60000,
@@ -26,9 +26,9 @@ class ACTAgent:
         cameras: list = peract_utils.CAMERAS,
     ):
         self.device = device
-        self.act_model = ACTModel(cfg_dict=cfg_dict, num_img=cfg_dict["num_images"]).to(
-            device
-        )
+        self.act_model = ACTModel(
+            cfg_dict=cfg_dict, num_img=cfg_dict["num_images"], norm_stats=norm_stats
+        ).to(device)
         self.move_pc_in_bound = cfg_dict["move_pc_in_bound"]
         self._place_with_mean = cfg_dict["place_with_mean"]
         self.scene_bounds = scene_bounds
@@ -46,9 +46,7 @@ class ACTAgent:
         self._warmup_steps = cfg_dict["warmup_steps"]
         self._lr_cos_dec = cfg_dict["lr_cos_dec"]
         self._lr = cfg_dict["lr"]
-        self.debug = cfg_dict["debug"]
         self._training = False
-        self._video_recorder = VideoRecorder(num_img=cfg_dict["num_images"])
 
     def update(self, observation, target_pose, eval: bool = False):
         with torch.no_grad():
@@ -182,36 +180,36 @@ class ACTAgent:
             proj_pts = self.renderer.get_pt_loc_on_img(
                 pt=proj_wpt, fix_cam=True, dyn_cam_info=None
             )  # (bs, 1, num_img, 2)
-            heatmap = torch.zeros(b, n, 1, h, w).to(
+
+            target_heatmap = torch.zeros(b, n, 1, h, w).to(
+                self.device
+            )  # (bs, num_img, 1, h, w)
+            dir_heatmap = torch.zeros(b, n, 1, h, w).to(
                 self.device
             )  # (bs, num_img, 1, h, w)
 
-            def clamp(x, y, min_value=0, max_value=219):
+            def clamp(pt, min_value=0, max_value=219):
+                x, y = pt
                 x = max(min(x, max_value), min_value)
                 y = max(min(y, max_value), min_value)
+                pt = x, y
 
-                return x, y
+                return pt
 
             for sb in range(b):
                 for sn in range(n):
                     pt = pts[sb, 0, sn, :].int()
-                    x, y = pt
-                    x, y = clamp(x, y)
-                    heatmap[sb, sn, 0, y, x] = 1
-
+                    x, y = clamp(pt)
+                    pt = torch.tensor([[x, y]]).to(self.device)
+                    target_heatmap[sb, sn] = mvt_utils.generate_hm_from_pt(pt, (h, w), sigma=1.5)
                     proj_pt = proj_pts[sb, 0, sn, :].int()
-                    dir_2d = proj_pt - pt
-                    x1, y1 = x + dir_2d[0], y + dir_2d[1]
-                    dir_pts = self.bresenham_line(int(x), int(y), int(x1), int(y1))
-                    for dir_pt in dir_pts:
-                        x, y = clamp(dir_pt[0], dir_pt[1])
-                        heatmap[sb, sn, 0, y, x] = 0.5
+                    x, y = clamp(proj_pt)
+                    proj_pt = torch.tensor([[x, y]]).to(self.device)
+                    dir_heatmap[sb, sn] = mvt_utils.generate_hm_from_pt(proj_pt, (h, w), sigma=3)
 
-            img = torch.cat((img, heatmap), dim=2)
-            if self.debug:
-                self._video_recorder.record(
-                    img=img
-                )  # Record video - Image + heatmap while debugging.
+            # img = torch.cat((img, heatmap), dim=2)
+            img = torch.cat((img, target_heatmap), dim=2)
+            img = torch.cat((img, dir_heatmap), dim=2)
 
             # image augmentation
             if img_aug != 0:
@@ -228,7 +226,7 @@ class ACTAgent:
 
         if training:
             # Don't use debug during training
-            self.debug = False
+            self.act_model.debug = False
 
         if self._optimizer_type == "lamb":
             # From: https://github.com/cybertronai/pytorch-lamb/blob/master/pytorch_lamb/lamb.py
@@ -273,26 +271,3 @@ class ACTAgent:
         gripper_direction = np.dot(rotation_matrix, reference_vector)
 
         return torch.tensor(gripper_direction).to(self.device).float()
-
-    def bresenham_line(self, x0, y0, x1, y1):
-        """Generate points along a line using Bresenham's algorithm."""
-        points = []
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx - dy
-
-        while True:
-            points.append((x0, y0))
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x0 += sx
-            if e2 < dx:
-                err += dx
-                y0 += sy
-
-        return points
